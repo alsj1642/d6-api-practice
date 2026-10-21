@@ -1,0 +1,5 @@
+# 드라이브 추천 배포 설정
+# Netlify에서 Base directory를 drive-site 로 정하면 이 파일을 읽어요.
+[build]
+  publish = "."
+  functions = "netlify/functions"
