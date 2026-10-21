@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>나의 아침 대시보드</title>
+<script>
+  // 🔌 이 화면이 쓰는 API 주소는 전부 여기 한 곳에 모아 둠 (모두 키 없음)
+  const PLACE = "서울 (시청)"; // 우리 동네 이름 — 아래 두 주소의 latitude/longitude를 바꾸면 이것도 같이 바꿔 주세요
+  const API = {
+    // 🔌 카드1 Open-Meteo 예보 — latitude=위도, longitude=경도
+    weather: "https://api.open-meteo.com/v1/forecast?latitude=37.5665&longitude=126.9780&current=temperature_2m,weather_code&timezone=Asia%2FSeoul",
+    // 🔌 카드1 Open-Meteo 대기질 — 위와 같은 위도·경도
+    air: "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=37.5665&longitude=126.9780&current=pm10,pm2_5&timezone=Asia%2FSeoul",
+    // 🔌 카드2 Frankfurter — 1달러 → 원화
+    usd: "https://api.frankfurter.dev/v1/latest?from=USD&to=KRW",
+    // 🔌 카드2 Frankfurter — 1엔 → 원화 (화면에는 ×100 해서 100엔으로 보여 줌)
+    jpy: "https://api.frankfurter.dev/v1/latest?from=JPY&to=KRW",
+    // 🔌 카드3 Nager.Date — 한국(KR)의 다가오는 공휴일 목록
+    holiday: "https://date.nager.at/api/v3/NextPublicHolidays/KR",
+    // 🔌 카드4 Dog CEO — 랜덤 강아지 사진 주소
+    dog: "https://dog.ceo/api/breeds/image/random",
+  };
+</script>
+<style>
+  :root {
+    --bg: #fbf7f0;
+    --card: #ffffff;
+    --text: #2b2620;
+    --muted: #7a7064;
+    --line: #ebe2d4;
+    --accent: #c2410c;
+    --error-bg: #fef2f2;
+    --error-text: #b91c1c;
+    --good: #2563eb;
+    --normal: #16a34a;
+    --bad: #ea580c;
+    --very-bad: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17140f;
+      --card: #231f19;
+      --text: #ede6dc;
+      --muted: #a89d8f;
+      --line: #3a332a;
+      --accent: #fb923c;
+      --error-bg: #3b1d1d;
+      --error-text: #fca5a5;
+      --good: #60a5fa;
+      --normal: #4ade80;
+      --bad: #fb923c;
+      --very-bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 40px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  header { margin-bottom: 20px; }
+  #greeting { font-size: 1.6rem; margin: 0; }
+  #today { color: var(--muted); margin: 4px 0 0; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 18px 20px; min-height: 170px;
+  }
+  .card h2 { font-size: 0.95rem; margin: 0 0 10px; color: var(--muted); }
+  .big { font-size: 2rem; font-weight: 700; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0; gap: 8px; }
+  .small { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+  .grade-good { color: var(--good); font-weight: 700; }
+  .grade-normal { color: var(--normal); font-weight: 700; }
+  .grade-bad { color: var(--bad); font-weight: 700; }
+  .grade-very-bad { color: var(--very-bad); font-weight: 700; }
+  .dday { font-size: 2.4rem; font-weight: 800; color: var(--accent); }
+  .dog img {
+    width: 100%; height: 200px; object-fit: cover;
+    border-radius: 12px; display: block; background: var(--line);
+  }
+  button {
+    font: inherit; margin-top: 10px; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer;
+  }
+  .error {
+    background: var(--error-bg); color: var(--error-text);
+    border-radius: 12px; padding: 12px; font-size: 0.9rem;
+  }
+  .error button { border-color: currentColor; background: transparent; color: inherit; }
+  .source { margin-top: 16px; font-size: 0.85rem; color: var(--muted); text-align: center; }
+  .source a { color: var(--accent); }
+  .api-box {
+    margin-top: 24px; padding: 16px;
+    border: 1px dashed var(--line); border-radius: 12px;
+    font-size: 0.85rem; background: var(--card);
+  }
+  .api-box h2 { font-size: 1rem; margin: 0 0 8px; }
+  .api-box li { margin-bottom: 10px; }
+  .api-box code { display: block; word-break: break-all; color: var(--muted); }
+  .api-box a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="greeting">안녕하세요!</h1>
+    <p id="today"></p>
+  </header>
+
+  <div class="cards">
+    <section class="card" id="weather-card"><h2>🌤️ 우리 동네 날씨</h2><p>⏳ 불러오는 중…</p></section>
+    <section class="card" id="rate-card"><h2>💱 환율</h2><p>⏳ 불러오는 중…</p></section>
+    <section class="card" id="holiday-card"><h2>📅 다음 공휴일</h2><p>⏳ 불러오는 중…</p></section>
+    <section class="card dog" id="dog-card"><h2>🐶 오늘의 강아지</h2><p>⏳ 불러오는 중…</p></section>
+  </div>
+
+  <p class="source">
+    Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a>
+    · 환율 <a href="https://frankfurter.dev/" target="_blank" rel="noopener">Frankfurter</a>(유럽중앙은행 기준 환율)
+    · 공휴일 <a href="https://date.nager.at/" target="_blank" rel="noopener">Nager.Date</a>
+    · 강아지 <a href="https://dog.ceo/dog-api/" target="_blank" rel="noopener">Dog CEO</a>
+  </p>
+
+  <section class="api-box">
+    <h2>🔌 이 화면이 쓰는 API</h2>
+    <ol id="api-list"></ol>
+  </section>
+</main>
+
+<script>
+  const WEATHER_CODES = {
+    0: ["맑음", "☀️"], 1: ["대체로 맑음", "🌤️"], 2: ["구름 조금", "⛅"], 3: ["흐림", "☁️"],
+    45: ["안개", "🌫️"], 48: ["서리 안개", "🌫️"],
+    51: ["약한 이슬비", "🌦️"], 53: ["이슬비", "🌦️"], 55: ["강한 이슬비", "🌧️"],
+    56: ["약한 어는 이슬비", "🌧️"], 57: ["강한 어는 이슬비", "🌧️"],
+    61: ["약한 비", "🌦️"], 63: ["비", "🌧️"], 65: ["강한 비", "🌧️"],
+    66: ["약한 어는 비", "🌧️"], 67: ["강한 어는 비", "🌧️"],
+    71: ["약한 눈", "🌨️"], 73: ["눈", "❄️"], 75: ["강한 눈", "❄️"], 77: ["싸락눈", "🌨️"],
+    80: ["약한 소나기", "🌦️"], 81: ["소나기", "🌧️"], 82: ["강한 소나기", "⛈️"],
+    85: ["약한 눈 소나기", "🌨️"], 86: ["강한 눈 소나기", "❄️"],
+    95: ["뇌우", "⛈️"], 96: ["우박을 동반한 뇌우", "⛈️"], 99: ["강한 우박 뇌우", "⛈️"],
+  };
+
+  // 한국 환경부 미세먼지 예보 등급 (단위 ㎍/㎥, 이하 기준)
+  const PM10_GRADES = [[30, "좋음", "good"], [80, "보통", "normal"], [150, "나쁨", "bad"], [Infinity, "매우나쁨", "very-bad"]];
+  const PM25_GRADES = [[15, "좋음", "good"], [35, "보통", "normal"], [75, "나쁨", "bad"], [Infinity, "매우나쁨", "very-bad"]];
+  const grade = (value, table) => table.find(([max]) => Math.round(value) <= max);
+
+  // ── 인사말: 시간대에 따라 다르게 ──
+  function showGreeting() {
+    const now = new Date();
+    const h = now.getHours();
+    let text;
+    if (h >= 5 && h < 11) text = "☀️ 좋은 아침이에요!";
+    else if (h >= 11 && h < 17) text = "🍱 점심 맛있게 드셨나요?";
+    else text = "🌙 오늘 하루도 수고했어요!";
+    document.getElementById("greeting").textContent = text;
+    document.getElementById("today").textContent =
+      now.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
+  }
+
+  // ── 🔌 API 상자: 실제로 부르는 주소와 원본 JSON 링크 ──
+  function showApis() {
+    const items = [
+      ["카드1 날씨 (Open-Meteo 예보)", API.weather],
+      ["카드1 미세먼지 (Open-Meteo 대기질)", API.air],
+      ["카드2 달러 환율 (Frankfurter)", API.usd],
+      ["카드2 엔 환율 (Frankfurter)", API.jpy],
+      ["카드3 공휴일 (Nager.Date)", API.holiday],
+      ["카드4 강아지 (Dog CEO)", API.dog],
+    ];
+    document.getElementById("api-list").innerHTML = items.map(([label, url]) => `
+      <li>${label}<code>${url}</code><a href="${url}" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기 ↗</a></li>
+    `).join("");
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url); // 🔌 API 호출
+    if (!res.ok) throw new Error("응답 코드 " + res.status);
+    return res.json();
+  }
+
+  function showError(card, title, what, err, retryName) {
+    card.innerHTML = `
+      <h2>${title}</h2>
+      <div class="error">
+        <strong>⚠️ ${what}을(를) 불러오지 못했어요.</strong><br>
+        인터넷 연결이나 맨 위 🔌 주소를 확인해 주세요.<br>
+        <small>(${err.message})</small><br>
+        <button onclick="${retryName}()">다시 시도</button>
+      </div>
+    `;
+  }
+
+  // ── 카드1: 날씨 + 미세먼지 ──
+  async function loadWeather() {
+    const card = document.getElementById("weather-card");
+    const title = `🌤️ 우리 동네 날씨 · ${PLACE}`;
+    card.innerHTML = `<h2>${title}</h2><p>⏳ 불러오는 중…</p>`;
+    try {
+      const [w, a] = await Promise.all([getJson(API.weather), getJson(API.air)]);
+      const now = w.current, air = a.current;
+      if (!now || now.temperature_2m === undefined) throw new Error("날씨 응답에 current 값이 없어요");
+      if (!air || air.pm10 == null || air.pm2_5 == null) throw new Error("대기질 응답에 pm10, pm2_5 값이 없어요");
+      const [desc, emoji] = WEATHER_CODES[now.weather_code] || ["알 수 없음 (코드 " + now.weather_code + ")", "❔"];
+      const [, g10, c10] = grade(air.pm10, PM10_GRADES);
+      const [, g25, c25] = grade(air.pm2_5, PM25_GRADES);
+      card.innerHTML = `
+        <h2>${title}</h2>
+        <div class="big">${emoji} ${Math.round(now.temperature_2m)}°C</div>
+        <div>${desc}</div>
+        <div class="row"><span>미세먼지 ${Math.round(air.pm10)}㎍/㎥</span><span class="grade-${c10}">${g10}</span></div>
+        <div class="row"><span>초미세먼지 ${Math.round(air.pm2_5)}㎍/㎥</span><span class="grade-${c25}">${g25}</span></div>
+        <div class="small">기준 시각 ${now.time.replace("T", " ")} · 미세먼지는 모델 예측값, 등급은 환경부 기준</div>
+      `;
+    } catch (err) {
+      showError(card, title, "날씨", err, "loadWeather");
+    }
+  }
+
+  // ── 카드2: 1달러 · 100엔 환율 ──
+  async function loadRate() {
+    const card = document.getElementById("rate-card");
+    const title = "💱 환율";
+    card.innerHTML = `<h2>${title}</h2><p>⏳ 불러오는 중…</p>`;
+    try {
+      const [usd, jpy] = await Promise.all([getJson(API.usd), getJson(API.jpy)]);
+      if (!usd.rates || usd.rates.KRW === undefined || !jpy.rates || jpy.rates.KRW === undefined) {
+        throw new Error("응답에 KRW 환율이 없어요");
+      }
+      const won = n => n.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "원";
+      card.innerHTML = `
+        <h2>${title}</h2>
+        <div class="row"><span>🇺🇸 1달러</span><span class="big">${won(usd.rates.KRW)}</span></div>
+        <div class="row"><span>🇯🇵 100엔</span><span class="big">${won(jpy.rates.KRW * 100)}</span></div>
+        <div class="small">기준 날짜 ${usd.date} · 유럽중앙은행이 영업일마다 하루 한 번 발표하는 기준 환율</div>
+      `;
+    } catch (err) {
+      showError(card, title, "환율", err, "loadRate");
+    }
+  }
+
+  // ── 카드3: 다음 공휴일 D-day ──
+  async function loadHoliday() {
+    const card = document.getElementById("holiday-card");
+    const title = "📅 다음 공휴일";
+    card.innerHTML = `<h2>${title}</h2><p>⏳ 불러오는 중…</p>`;
+    try {
+      const list = await getJson(API.holiday);
+      if (!Array.isArray(list) || !list.length) throw new Error("응답에 공휴일 목록이 없어요");
+      const next = list[0];
+      // 날짜만 비교 (시·분 때문에 하루가 어긋나지 않게)
+      const [y, m, d] = next.date.split("-").map(Number);
+      const t = new Date();
+      const days = Math.round((Date.UTC(y, m - 1, d) - Date.UTC(t.getFullYear(), t.getMonth(), t.getDate())) / 86400000);
+      const dday = days === 0 ? "D-DAY" : "D-" + days;
+      const name = next.localName || next.name;
+      card.innerHTML = `
+        <h2>${title}</h2>
+        <div class="dday">${dday}</div>
+        <div><strong>${name}</strong> · ${m}월 ${d}일</div>
+        <div class="small">그다음: ${list.slice(1, 3).map(h => `${h.localName || h.name}(${h.date.slice(5).replace("-", "/")})`).join(", ") || "없음"}</div>
+      `;
+    } catch (err) {
+      showError(card, title, "공휴일", err, "loadHoliday");
+    }
+  }
+
+  // ── 카드4: 랜덤 강아지 ──
+  async function loadDog() {
+    const card = document.getElementById("dog-card");
+    const title = "🐶 오늘의 강아지";
+    card.innerHTML = `<h2>${title}</h2><p>⏳ 불러오는 중…</p>`;
+    try {
+      const data = await getJson(API.dog);
+      if (data.status !== "success" || !data.message) throw new Error("응답에 사진 주소가 없어요");
+      const breed = data.message.split("/breeds/")[1]?.split("/")[0] || "강아지";
+      card.innerHTML = `
+        <h2>${title}</h2>
+        <img src="${data.message}" alt="랜덤 강아지 사진 (${breed})">
+        <div class="row"><span class="small">품종: ${breed}</span><button onclick="loadDog()">🔄 다른 강아지</button></div>
+      `;
+    } catch (err) {
+      showError(card, title, "강아지 사진", err, "loadDog");
+    }
+  }
+
+  showGreeting();
+  showApis();
+  // 카드 4장을 따로 불러서, 하나가 실패해도 나머지 카드는 보이게
+  loadWeather();
+  loadRate();
+  loadHoliday();
+  loadDog();
+</script>
+</body>
+</html>

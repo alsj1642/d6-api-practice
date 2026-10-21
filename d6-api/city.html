@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>도시 날씨와 미세먼지</title>
+<script>
+  // 🔌 이 화면이 쓰는 API 주소는 전부 여기 한 곳에 모아 둠 (모두 키 없음)
+  // 🔌 순서: ① 지오코딩으로 위도·경도 찾기 → ② 그 숫자를 날씨·대기질 주소의 latitude/longitude에 넣기
+  const API = {
+    // 🔌 ① Open-Meteo 지오코딩 — name=도시 이름 → 응답의 latitude, longitude
+    geocoding: "https://geocoding-api.open-meteo.com/v1/search?count=10&language=ko&format=json&name=",
+    // 🔌 ② Open-Meteo 예보 — 뒤에 &latitude=..&longitude=.. 를 붙여서 부름
+    weather: "https://api.open-meteo.com/v1/forecast?current=temperature_2m,apparent_temperature,weather_code&timezone=Asia%2FSeoul",
+    // 🔌 ② Open-Meteo 대기질 — 뒤에 &latitude=..&longitude=.. 를 붙여서 부름
+    air: "https://air-quality-api.open-meteo.com/v1/air-quality?current=pm10,pm2_5&timezone=Asia%2FSeoul",
+  };
+</script>
+<style>
+  :root {
+    --bg: #f1f4f9;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --line: #dbe2ec;
+    --accent: #2563eb;
+    --error-bg: #fef2f2;
+    --error-text: #b91c1c;
+    --good: #2563eb;
+    --normal: #16a34a;
+    --bad: #ea580c;
+    --very-bad: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --line: #334155;
+      --accent: #60a5fa;
+      --error-bg: #3b1d1d;
+      --error-text: #fca5a5;
+      --good: #60a5fa;
+      --normal: #4ade80;
+      --bad: #fb923c;
+      --very-bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 40px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 16px; }
+  form { display: flex; gap: 8px; margin-bottom: 8px; }
+  form input {
+    flex: 1; min-width: 0; font: inherit; font-size: 1.05rem;
+    padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  form button {
+    font: inherit; padding: 10px 16px; border-radius: 10px; border: none;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  .hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 16px; }
+  #place { font-weight: 600; margin-bottom: 12px; min-height: 1.5em; }
+  #place small { font-weight: 400; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 480px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 20px; text-align: center;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+  .emoji { font-size: 3rem; line-height: 1.1; }
+  .temp { font-size: 2.4rem; font-weight: 700; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0; }
+  .grade { font-weight: 700; font-size: 1.15rem; }
+  .grade-good { color: var(--good); }
+  .grade-normal { color: var(--normal); }
+  .grade-bad { color: var(--bad); }
+  .grade-very-bad { color: var(--very-bad); }
+  .small { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+  .error {
+    background: var(--error-bg); color: var(--error-text);
+    border-radius: 12px; padding: 12px; text-align: left; font-size: 0.9rem;
+  }
+  .source { margin-top: 12px; font-size: 0.85rem; color: var(--muted); text-align: center; }
+  .source a { color: var(--accent); }
+  .api-box {
+    margin-top: 24px; padding: 16px;
+    border: 1px dashed var(--line); border-radius: 12px;
+    font-size: 0.85rem; background: var(--card);
+  }
+  .api-box h2 { font-size: 1rem; margin: 0 0 8px; }
+  .api-box li { margin-bottom: 10px; }
+  .api-box code { display: block; word-break: break-all; color: var(--muted); }
+  .api-box a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>🏙️ 도시 날씨와 미세먼지</h1>
+
+  <form id="search">
+    <input id="city" value="서울" placeholder="도시 이름 (예: 부산, 대전, Tokyo)" aria-label="도시 이름">
+    <button type="submit">찾기</button>
+  </form>
+  <p class="hint">한국 도시는 "부산"처럼 넣어도 "부산광역시"까지 찾아봐요.</p>
+
+  <div id="place"></div>
+
+  <div class="cards">
+    <section class="card" id="weather-card"><p>도시를 입력해 주세요.</p></section>
+    <section class="card" id="air-card"><p>도시를 입력해 주세요.</p></section>
+  </div>
+
+  <p class="source">
+    Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a>
+    · 미세먼지 값은 측정소 실측이 아니라 모델 예측값이라 에어코리아와 다를 수 있어요
+  </p>
+
+  <section class="api-box">
+    <h2>🔌 이 화면이 쓰는 API</h2>
+    <ol id="api-list"><li>아직 부른 API가 없어요.</li></ol>
+  </section>
+</main>
+
+<script>
+  const WEATHER_CODES = {
+    0: ["맑음", "☀️"], 1: ["대체로 맑음", "🌤️"], 2: ["구름 조금", "⛅"], 3: ["흐림", "☁️"],
+    45: ["안개", "🌫️"], 48: ["서리 안개", "🌫️"],
+    51: ["약한 이슬비", "🌦️"], 53: ["이슬비", "🌦️"], 55: ["강한 이슬비", "🌧️"],
+    56: ["약한 어는 이슬비", "🌧️"], 57: ["강한 어는 이슬비", "🌧️"],
+    61: ["약한 비", "🌦️"], 63: ["비", "🌧️"], 65: ["강한 비", "🌧️"],
+    66: ["약한 어는 비", "🌧️"], 67: ["강한 어는 비", "🌧️"],
+    71: ["약한 눈", "🌨️"], 73: ["눈", "❄️"], 75: ["강한 눈", "❄️"], 77: ["싸락눈", "🌨️"],
+    80: ["약한 소나기", "🌦️"], 81: ["소나기", "🌧️"], 82: ["강한 소나기", "⛈️"],
+    85: ["약한 눈 소나기", "🌨️"], 86: ["강한 눈 소나기", "❄️"],
+    95: ["뇌우", "⛈️"], 96: ["우박을 동반한 뇌우", "⛈️"], 99: ["강한 우박 뇌우", "⛈️"],
+  };
+
+  // 한국 환경부 미세먼지 예보 등급 (단위 ㎍/㎥, 이하 기준)
+  const PM10_GRADES = [[30, "좋음", "good"], [80, "보통", "normal"], [150, "나쁨", "bad"], [Infinity, "매우나쁨", "very-bad"]];
+  const PM25_GRADES = [[15, "좋음", "good"], [35, "보통", "normal"], [75, "나쁨", "bad"], [Infinity, "매우나쁨", "very-bad"]];
+
+  function grade(value, table) {
+    const v = Math.round(value);
+    return table.find(([max]) => v <= max);
+  }
+
+  const placeEl = document.getElementById("place");
+  const weatherCard = document.getElementById("weather-card");
+  const airCard = document.getElementById("air-card");
+  const apiList = document.getElementById("api-list");
+
+  function errorBox(title, err) {
+    return `<div class="error"><strong>⚠️ ${title}</strong><br>인터넷 연결이나 맨 위 🔌 주소를 확인해 주세요.<br><small>(${err.message})</small></div>`;
+  }
+
+  // API 상자: 실제로 부른 주소와 원본 JSON 링크
+  function showApis(items) {
+    apiList.innerHTML = items.map(([label, url]) => `
+      <li>${label}<code>${url}</code><a href="${url}" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기 ↗</a></li>
+    `).join("");
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url); // 🔌 API 호출
+    if (!res.ok) throw new Error("응답 코드 " + res.status);
+    return res.json();
+  }
+
+  // ① 도시 이름 → 위도·경도
+  // "부산"으로 찾으면 작은 마을이 먼저 나와서, 인구 정보가 있는 큰 도시가 나올 때까지 "광역시/특별시/시"를 붙여 다시 찾음
+  async function findCity(name) {
+    const tries = [name, name + "광역시", name + "특별시", name + "시"];
+    let firstFound = null;
+    let lastUrl = API.geocoding + encodeURIComponent(name);
+    for (const q of tries) {
+      const url = API.geocoding + encodeURIComponent(q);
+      const data = await getJson(url);
+      const results = data.results || [];
+      if (!results.length) continue;
+      const withPop = results.filter(r => r.population).sort((a, b) => b.population - a.population);
+      if (withPop.length) return { city: withPop[0], url };
+      if (!firstFound) { firstFound = results[0]; lastUrl = url; }
+    }
+    return { city: firstFound, url: lastUrl };
+  }
+
+  async function loadWeather(lat, lon) {
+    weatherCard.innerHTML = "<h2>🌡️ 날씨</h2><p>⏳ 불러오는 중…</p>";
+    try {
+      const data = await getJson(`${API.weather}&latitude=${lat}&longitude=${lon}`);
+      const now = data.current;
+      if (!now || now.temperature_2m === undefined) throw new Error("응답에 current 값이 없어요");
+      const [desc, emoji] = WEATHER_CODES[now.weather_code] || ["알 수 없음 (코드 " + now.weather_code + ")", "❔"];
+      weatherCard.innerHTML = `
+        <h2>🌡️ 날씨</h2>
+        <div class="emoji">${emoji}</div>
+        <div class="temp">${Math.round(now.temperature_2m)}°C</div>
+        <div>${desc} · 체감 ${Math.round(now.apparent_temperature)}°C</div>
+        <div class="small">기준 시각: ${now.time.replace("T", " ")} (한국 시간)</div>
+      `;
+    } catch (err) {
+      weatherCard.innerHTML = "<h2>🌡️ 날씨</h2>" + errorBox("날씨를 불러오지 못했어요.", err);
+    }
+  }
+
+  async function loadAir(lat, lon) {
+    airCard.innerHTML = "<h2>😷 미세먼지</h2><p>⏳ 불러오는 중…</p>";
+    try {
+      const data = await getJson(`${API.air}&latitude=${lat}&longitude=${lon}`);
+      const now = data.current;
+      if (!now || now.pm10 == null || now.pm2_5 == null) throw new Error("응답에 pm10, pm2_5 값이 없어요");
+      const [, g10, c10] = grade(now.pm10, PM10_GRADES);
+      const [, g25, c25] = grade(now.pm2_5, PM25_GRADES);
+      airCard.innerHTML = `
+        <h2>😷 미세먼지</h2>
+        <div class="row"><span>미세먼지 PM10</span><span class="grade grade-${c10}">${g10}</span></div>
+        <div class="row small"><span></span><span>${Math.round(now.pm10)} ㎍/㎥</span></div>
+        <div class="row"><span>초미세먼지 PM2.5</span><span class="grade grade-${c25}">${g25}</span></div>
+        <div class="row small"><span></span><span>${Math.round(now.pm2_5)} ㎍/㎥</span></div>
+        <div class="small">등급: 한국 환경부 기준 · 기준 시각: ${now.time.replace("T", " ")} (한국 시간)</div>
+      `;
+    } catch (err) {
+      airCard.innerHTML = "<h2>😷 미세먼지</h2>" + errorBox("미세먼지를 불러오지 못했어요.", err);
+    }
+  }
+
+  async function search(name) {
+    name = name.trim();
+    if (!name) return;
+    placeEl.textContent = "⏳ 도시를 찾는 중…";
+    weatherCard.innerHTML = "<h2>🌡️ 날씨</h2><p>⏳ 도시를 찾는 중…</p>";
+    airCard.innerHTML = "<h2>😷 미세먼지</h2><p>⏳ 도시를 찾는 중…</p>";
+
+    let found;
+    try {
+      found = await findCity(name);
+    } catch (err) {
+      placeEl.innerHTML = errorBox("도시를 찾지 못했어요.", err);
+      weatherCard.innerHTML = "<h2>🌡️ 날씨</h2><p>도시를 먼저 찾아야 해요.</p>";
+      airCard.innerHTML = "<h2>😷 미세먼지</h2><p>도시를 먼저 찾아야 해요.</p>";
+      showApis([["① 지오코딩", API.geocoding + encodeURIComponent(name)]]);
+      return;
+    }
+
+    if (!found.city) {
+      placeEl.textContent = `🤔 "${name}"(이)라는 도시를 찾지 못했어요. 다른 이름이나 영어로 넣어 보세요.`;
+      weatherCard.innerHTML = "<h2>🌡️ 날씨</h2><p>도시를 먼저 찾아야 해요.</p>";
+      airCard.innerHTML = "<h2>😷 미세먼지</h2><p>도시를 먼저 찾아야 해요.</p>";
+      showApis([["① 지오코딩", found.url]]);
+      return;
+    }
+
+    const { latitude: lat, longitude: lon } = found.city;
+    const where = [found.city.admin1 !== found.city.name ? found.city.admin1 : null, found.city.country].filter(Boolean).join(", ");
+    placeEl.innerHTML = `📍 ${found.city.name} <small>${where} · 위도 ${lat}, 경도 ${lon}</small>`;
+
+    showApis([
+      ["① 지오코딩 (도시 이름 → 위도·경도)", found.url],
+      ["② 날씨 예보 (①의 위도·경도 사용)", `${API.weather}&latitude=${lat}&longitude=${lon}`],
+      ["② 대기질 (①의 위도·경도 사용)", `${API.air}&latitude=${lat}&longitude=${lon}`],
+    ]);
+
+    // 날씨와 미세먼지는 따로 불러서, 하나가 실패해도 다른 카드는 보이게
+    loadWeather(lat, lon);
+    loadAir(lat, lon);
+  }
+
+  const cityInput = document.getElementById("city");
+  document.getElementById("search").addEventListener("submit", e => {
+    e.preventDefault();
+    search(cityInput.value);
+  });
+  search(cityInput.value);
+</script>
+</body>
+</html>

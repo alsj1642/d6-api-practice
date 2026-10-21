@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>과자 성분 보기</title>
+<script>
+  // 🔌 이 화면이 쓰는 API 주소는 전부 여기 한 곳에 모아 둠
+  const API = {
+    // 🔌 Open Food Facts 상품 API (키 없음) — /product/ 뒤 숫자가 바코드 번호, fields=받아 올 이름표 목록
+    product: "https://world.openfoodfacts.org/api/v2/product/8801043020756.json?fields=code,product_name,product_name_ko,brands,quantity,image_front_url,allergens_tags,traces_tags,nutriments,ingredients_text,ingredients_text_ko,last_modified_t",
+  };
+</script>
+<style>
+  :root {
+    --bg: #fdf3e7;
+    --bg-dot: #f6e2c8;
+    --card: #ffffff;
+    --text: #2b2118;
+    --muted: #8a7a6a;
+    --line: #f0e2d0;
+    --accent: #e8590c;
+    --accent-soft: #fff0e3;
+    --hero-1: #ffd8a8;
+    --hero-2: #ffa94d;
+    --bar-bg: #f6ebdd;
+    --shadow: 0 8px 24px rgba(160, 90, 30, 0.12);
+    --warn-bg: #fff7ed;
+    --warn-text: #9a3412;
+    --error-bg: #fef2f2;
+    --error-text: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17120d;
+      --bg-dot: #221a12;
+      --card: #231c15;
+      --text: #f1e9e0;
+      --muted: #a8998a;
+      --line: #3d3127;
+      --accent: #ff922b;
+      --accent-soft: #3a2a1d;
+      --hero-1: #5c3417;
+      --hero-2: #8a4a1a;
+      --bar-bg: #3a2e24;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      --warn-bg: #3a2414;
+      --warn-text: #fdba74;
+      --error-bg: #3b1d1d;
+      --error-text: #fca5a5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 16px 40px;
+    background-color: var(--bg);
+    background-image: radial-gradient(var(--bg-dot) 1.5px, transparent 1.5px);
+    background-size: 22px 22px;
+    color: var(--text);
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 520px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 18px; }
+  h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 0.92rem; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow);
+  }
+  .card h2 { font-size: 1.05rem; margin: 0 0 12px; }
+
+  /* 검색 */
+  .search { display: flex; gap: 8px; }
+  .search input {
+    flex: 1; min-width: 0;
+    font: inherit; font-size: 1.15rem; letter-spacing: 0.08em;
+    padding: 12px 14px; border-radius: 14px;
+    border: 2px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  .search input:focus { outline: none; border-color: var(--accent); }
+  .search button {
+    font: inherit; font-weight: 700; cursor: pointer;
+    padding: 12px 18px; border-radius: 14px; border: none;
+    background: var(--accent); color: #fff;
+  }
+  .samples { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 0.85rem; color: var(--muted); align-items: center; }
+  .samples button {
+    font: inherit; font-size: 0.85rem; cursor: pointer;
+    padding: 5px 12px; border-radius: 999px;
+    border: none; background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  }
+  .hint { margin: 8px 0 0; font-size: 0.85rem; color: var(--error-text); min-height: 1.2em; }
+
+  /* 과자 카드 */
+  #product-card { padding: 0; overflow: hidden; }
+  #product-card > h2, #product-card > p, #product-card > .error { margin: 20px; }
+  .snack-hero {
+    position: relative;
+    height: 260px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--hero-1), var(--hero-2));
+  }
+  .snack-hero img {
+    max-width: 70%; max-height: 220px;
+    object-fit: contain;
+    border-radius: 12px;
+    background: #fff;
+    padding: 6px;
+    transform: rotate(-3deg);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.25);
+    transition: transform 0.3s;
+  }
+  .snack-hero img:hover { transform: rotate(0deg) scale(1.04); }
+  .snack-hero .no-img { font-size: 5rem; }
+  .kcal-badge {
+    position: absolute; top: 14px; right: 14px;
+    width: 72px; height: 72px; border-radius: 50%;
+    background: var(--card); color: var(--accent);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 1.15rem; line-height: 1.1;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  .kcal-badge small { font-size: 0.65rem; font-weight: 600; color: var(--muted); }
+  .snack-info { padding: 18px 20px 20px; }
+  .snack-info .brand {
+    display: inline-block; font-size: 0.8rem; font-weight: 700;
+    background: var(--accent-soft); color: var(--accent);
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .snack-info .name { font-size: 1.5rem; font-weight: 800; margin: 6px 0 2px; letter-spacing: -0.02em; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 0.85rem; }
+
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 5px 12px; font-weight: 700; font-size: 0.9rem; }
+  .chip.soft { font-weight: 500; opacity: 0.8; }
+  .warn {
+    margin-top: 12px; background: var(--warn-bg); color: var(--warn-text);
+    border-radius: 12px; padding: 10px 12px; font-size: 0.85rem;
+  }
+
+  /* 영양성분 막대 */
+  .nutri { display: grid; gap: 12px; }
+  .nutri-row .top { display: flex; justify-content: space-between; font-size: 0.92rem; }
+  .nutri-row .top b { font-weight: 700; }
+  .bar { height: 8px; background: var(--bar-bg); border-radius: 999px; overflow: hidden; margin-top: 4px; }
+  .bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .nutri-note { margin: 12px 0 0; font-size: 0.8rem; color: var(--muted); }
+
+  .ingredients { font-size: 0.92rem; white-space: pre-wrap; word-break: keep-all; margin: 0; }
+  .error {
+    background: var(--error-bg); color: var(--error-text);
+    border-radius: 14px; padding: 16px;
+  }
+  .error button {
+    margin-top: 8px; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer;
+  }
+  .error a { color: inherit; }
+  .source { margin-top: 12px; font-size: 0.85rem; color: var(--muted); text-align: center; }
+  .source a { color: var(--accent); }
+  .api-box {
+    margin-top: 24px; padding: 16px;
+    border: 1px dashed var(--muted); border-radius: 14px;
+    font-size: 0.85rem; background: var(--card);
+  }
+  .api-box h2 { font-size: 1rem; margin: 0 0 8px; }
+  .api-box code { display: block; word-break: break-all; color: var(--muted); margin-bottom: 8px; }
+  .api-box a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🍪 바코드로 과자 성분 보기</h1>
+    <p>포장지 바코드 아래 숫자만 넣으면 돼요</p>
+  </header>
+
+  <section class="card">
+    <form class="search" id="search-form">
+      <input id="barcode" inputmode="numeric" autocomplete="off" aria-label="바코드 번호" placeholder="예: 8801043020756">
+      <button type="submit">찾기</button>
+    </form>
+    <div class="samples">
+      예시
+      <button data-code="8801043020756">🥔 감자깡</button>
+      <button data-code="8801019319532">🍈 홈런볼 메론우유맛</button>
+      <button data-code="8801062383986">🌽 치토스</button>
+      <button data-code="8801045525136">🍜 미니뿌셔</button>
+    </div>
+    <p class="hint" id="hint"></p>
+  </section>
+
+  <section class="card" id="product-card"></section>
+  <section class="card" id="allergen-card"></section>
+  <section class="card" id="nutrition-card"></section>
+  <section class="card" id="ingredient-card"></section>
+
+  <p class="source">
+    Data from <a href="https://world.openfoodfacts.org/" target="_blank" rel="noopener">Open Food Facts</a> (ODbL)
+    · 누구나 사진을 올리고 고칠 수 있는 공개 데이터라 실제 포장지와 다를 수 있어요
+  </p>
+
+  <section class="api-box">
+    <h2>🔌 이 화면이 쓰는 API</h2>
+    <code id="api-url"></code>
+    <a id="api-link" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기 ↗</a>
+  </section>
+</main>
+
+<script>
+  const CARDS = {
+    product: ["product-card", "🛍️ 상품"],
+    allergen: ["allergen-card", "⚠️ 알레르기 성분"],
+    nutrition: ["nutrition-card", "📊 영양성분 (100g당)"],
+    ingredient: ["ingredient-card", "📝 원재료"],
+  };
+
+  // Open Food Facts 알레르기 태그 → 한국어
+  const ALLERGENS = {
+    "en:gluten": "밀(글루텐)", "en:milk": "우유", "en:eggs": "계란", "en:peanuts": "땅콩",
+    "en:nuts": "견과류", "en:soybeans": "대두", "en:fish": "생선", "en:crustaceans": "갑각류(새우·게)",
+    "en:molluscs": "조개류", "en:sesame-seeds": "참깨", "en:celery": "셀러리", "en:mustard": "겨자",
+    "en:lupin": "루핀", "en:sulphur-dioxide-and-sulphites": "아황산류",
+  };
+
+  // 화면에 보여 줄 영양성분: [이름표, 한국어, 단위, 곱할 수, 1일 기준치(식약처)]
+  const NUTRIENTS = [
+    ["energy-kcal_100g", "열량", "kcal", 1, 2000],
+    ["carbohydrates_100g", "탄수화물", "g", 1, 324],
+    ["sugars_100g", "당류", "g", 1, 100],
+    ["proteins_100g", "단백질", "g", 1, 55],
+    ["fat_100g", "지방", "g", 1, 54],
+    ["saturated-fat_100g", "포화지방", "g", 1, 15],
+    ["trans-fat_100g", "트랜스지방", "g", 1, null],
+    ["sodium_100g", "나트륨", "mg", 1000, 2000],
+  ];
+
+  const input = document.getElementById("barcode");
+  const hint = document.getElementById("hint");
+
+  // 🔌 API 주소 맨 위에 적힌 바코드를 처음 값으로 씀 (주소의 숫자를 바꾸면 처음 상품도 바뀜)
+  input.value = (API.product.match(/\/product\/(\d+)\.json/) || [])[1] || "";
+
+  function productUrl(code) {
+    return API.product.replace(/\/product\/\d+\.json/, `/product/${code}.json`);
+  }
+
+  function showApi(url) {
+    document.getElementById("api-url").textContent = url;
+    document.getElementById("api-link").href = url;
+  }
+
+  // 원재료 글은 누구나 올린 내용이라 그대로 HTML에 넣지 않고 글자로만 보여 줌
+  function esc(text) {
+    return String(text).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url); // 🔌 API 호출
+    if (!res.ok) {
+      const err = new Error("응답 코드 " + res.status);
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  }
+
+  function setCard(key, body) {
+    const [id, title] = CARDS[key];
+    document.getElementById(id).innerHTML = `<h2>${title}</h2>${body}`;
+  }
+
+  function showError(key, err) {
+    setCard(key, `
+      <div class="error">
+        <strong>⚠️ 불러오지 못했어요.</strong><br>
+        인터넷 연결이나 맨 위 🔌 주소를 확인해 주세요.<br>
+        <small>(${esc(err.message)})</small><br>
+        <button onclick="loadProduct()">다시 시도</button>
+      </div>
+    `);
+  }
+
+  // 과자 카드: 위에는 큰 포장 사진, 아래에는 이름·브랜드
+  function renderProduct(p, code) {
+    const name = p.product_name_ko || p.product_name || "(이름 없음)";
+    const updated = p.last_modified_t
+      ? new Date(p.last_modified_t * 1000).toLocaleDateString("ko-KR")
+      : "알 수 없음";
+    const kcal = (p.nutriments || {})["energy-kcal_100g"];
+    const img = p.image_front_url
+      ? `<img src="${esc(p.image_front_url)}" alt="${esc(name)} 포장 사진" onerror="this.outerHTML='<span class=&quot;no-img&quot;>🍪</span>'">`
+      : `<span class="no-img">🍪</span>`;
+    document.getElementById("product-card").innerHTML = `
+      <div class="snack-hero">
+        ${img}
+        ${typeof kcal === "number" ? `<div class="kcal-badge">${Math.round(kcal)}<small>kcal/100g</small></div>` : ""}
+      </div>
+      <div class="snack-info">
+        <span class="brand">${esc(p.brands || "브랜드 정보 없음")}</span>
+        <div class="name">${esc(name)}</div>
+        <div class="meta">
+          ${p.quantity ? `<span>📦 ${esc(p.quantity)}</span>` : ""}
+          <span>🏷️ ${esc(code)}</span>
+          <span>📅 기준 날짜 ${updated} (정보가 마지막으로 고쳐진 날)</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderAllergens(p) {
+    const tags = p.allergens_tags || [];
+    const traces = (p.traces_tags || []).filter(t => !tags.includes(t));
+    const chips = (list, cls) => list.map(t => `<span class="chip ${cls}">${esc(ALLERGENS[t] || t.replace(/^\w+:/, ""))}</span>`).join("");
+    setCard("allergen", `
+      ${tags.length ? `<div class="chips">${chips(tags, "")}</div>` : `<p class="muted">등록된 알레르기 성분이 없어요.</p>`}
+      ${traces.length ? `<p class="muted">같은 공장에서 다룰 수 있음</p><div class="chips">${chips(traces, "soft")}</div>` : ""}
+      <div class="warn">알레르기가 있다면 꼭 실제 포장지의 표시를 확인하세요. 이 목록은 사용자가 입력한 정보예요.</div>
+    `);
+  }
+
+  function renderNutrition(p) {
+    const n = p.nutriments || {};
+    const rows = NUTRIENTS
+      .filter(([field]) => typeof n[field] === "number")
+      .map(([field, label, unit, times, daily]) => {
+        const value = Math.round(n[field] * times * 10) / 10;
+        const pct = daily ? Math.round(value / daily * 100) : null;
+        return `
+          <div class="nutri-row">
+            <div class="top"><span>${label}</span><b>${value.toLocaleString("ko-KR")} ${unit}${pct !== null ? ` · ${pct}%` : ""}</b></div>
+            ${pct !== null ? `<div class="bar"><span style="width:${Math.min(pct, 100)}%"></span></div>` : ""}
+          </div>`;
+      }).join("");
+    setCard("nutrition", rows
+      ? `<div class="nutri">${rows}</div><p class="nutri-note">%는 하루 기준치(식약처) 대비 100g을 먹었을 때의 비율이에요.</p>`
+      : `<p class="muted">등록된 영양성분 정보가 없어요.</p>`);
+  }
+
+  function renderIngredients(p) {
+    const text = p.ingredients_text_ko || p.ingredients_text;
+    setCard("ingredient", text
+      ? `<p class="ingredients">${esc(text)}</p>`
+      : `<p class="muted">등록된 원재료 정보가 없어요.</p>`);
+  }
+
+  async function loadProduct() {
+    const code = input.value.trim();
+    if (!/^\d{8,14}$/.test(code)) {
+      hint.textContent = "바코드는 숫자 8~14자리예요. 포장지 바코드 아래 숫자를 그대로 넣어 주세요.";
+      return;
+    }
+    hint.textContent = "";
+
+    const url = productUrl(code);
+    showApi(url);
+    for (const key in CARDS) setCard(key, `<p>⏳ 불러오는 중…</p>`);
+
+    let data;
+    try {
+      data = await getJson(url);
+    } catch (err) {
+      if (err.status === 404) {
+        // 404 = 창구는 정상인데 이 바코드 상품이 아직 등록되지 않음
+        setCard("product", `
+          <div class="error">
+            <strong>🔍 바코드 ${esc(code)} 상품이 아직 등록되지 않았어요.</strong><br>
+            숫자를 다시 확인하거나, <a href="https://world.openfoodfacts.org/" target="_blank" rel="noopener">Open Food Facts</a>에 직접 등록할 수 있어요.
+          </div>
+        `);
+        for (const key of ["allergen", "nutrition", "ingredient"]) setCard(key, `<p class="muted">상품을 찾으면 여기에 보여 드릴게요.</p>`);
+      } else {
+        for (const key in CARDS) showError(key, err);
+      }
+      return;
+    }
+
+    if (input.value.trim() !== code) return; // 그사이 다른 바코드를 찾았으면 이 결과는 버림
+    const p = data.product || {};
+    // 한 카드를 그리다 문제가 생겨도 나머지 카드는 보이게 따로 그림
+    const renders = {
+      product: () => renderProduct(p, code),
+      allergen: () => renderAllergens(p),
+      nutrition: () => renderNutrition(p),
+      ingredient: () => renderIngredients(p),
+    };
+    for (const key in renders) {
+      try { renders[key](); } catch (err) { showError(key, err); }
+    }
+  }
+
+  document.getElementById("search-form").addEventListener("submit", e => {
+    e.preventDefault();
+    loadProduct();
+  });
+  document.querySelectorAll(".samples button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      input.value = btn.dataset.code;
+      loadProduct();
+    });
+  });
+  loadProduct();
+</script>
+</body>
+</html>
