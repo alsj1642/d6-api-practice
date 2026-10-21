@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="ko" data-phase="night">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>하늘노트 · 지금 해는 어디쯤?</title>
+<!-- 🔑 인증키는 config.js에 따로 둠 (git에 안 올라감) -->
+<script src="config.js"></script>
+<script>
+  // 🔌 이 화면이 쓰는 API 주소는 전부 여기 한 곳에 모아 둠 (한국천문연구원, 공공데이터포털 인증키 필요)
+  const API = {
+    // 🔌 출몰시각 정보 — 하늘색(새벽·낮·노을·밤)과 해 뜨고 지는 시각에 씀. location, locdate는 코드에서 붙임
+    RISE: "https://apis.data.go.kr/B090041/openapi/service/RiseSetInfoService/getAreaRiseSetInfo?_type=json",
+    // 🔌 태양고도 정보 — 9·12·15·18시 해의 방향(방위각)과 높이(고도), 남중고도. location, locdate는 코드에서 붙임
+    ALT: "https://apis.data.go.kr/B090041/openapi/service/SrAltudeInfoService/getAreaSrAltudeInfo?_type=json",
+  };
+</script>
+<script>try { const p = localStorage.getItem("sky-phase"); if (p) document.documentElement.dataset.phase = p; } catch {}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Noto+Serif+KR:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  /* ───── 하늘노트 공통 ───── */
+  /* 하늘 판 색을 "색"으로 등록해 두면 시간대가 바뀔 때 서서히 물듦 */
+  @property --s-base { syntax: "<color>"; inherits: true; initial-value: #1a2056; }
+  @property --s1 { syntax: "<color>"; inherits: true; initial-value: #3b3fb0; }
+  @property --s2 { syntax: "<color>"; inherits: true; initial-value: #7b6cff; }
+  @property --s3 { syntax: "<color>"; inherits: true; initial-value: #2a6bd8; }
+  :root {
+    --paper: #fafafb; --ink: #121317; --sub: #60646c; --faint: #9a9ea6; --hair: #e5e6ea; --hair-strong: #d3d5da;
+    --dark: #111216; --dark-sub: #9ca0aa; --dark-hair: rgba(255, 255, 255, .1);
+    --serif: "Noto Serif KR", "Source Serif 4", serif;
+    --sans: "Pretendard Variable", Pretendard, -apple-system, "Malgun Gothic", sans-serif;
+    --mono: "Geist Mono", "Pretendard Variable", Pretendard, ui-monospace, Consolas, monospace; /* 한글은 Pretendard로 */
+    /* 시간대별 하늘 판 색: 밤 (기본) */
+    --s-base: #141a4a; --s1: #3b3fb0; --s2: #7b6cff; --s3: #2a6bd8; --s-dot: #9db4ff;
+    transition: --s-base 1.8s ease, --s1 1.8s ease, --s2 1.8s ease, --s3 1.8s ease;
+  }
+  :root[data-phase="dawn"] { --s-base: #9a8fd8; --s1: #ffb8a0; --s2: #c3a8ff; --s3: #ffd9b0; --s-dot: #ff9f7f; }
+  :root[data-phase="day"] { --s-base: #6f9dff; --s1: #9cd0ff; --s2: #8a7dff; --s3: #4f7dff; --s-dot: #ffc83d; }
+  :root[data-phase="dusk"] { --s-base: #b061a8; --s1: #ff9a7a; --s2: #c56bdc; --s3: #ffbf75; --s-dot: #ff7a59; }
+
+  * { box-sizing: border-box; }
+  html { background: var(--paper); scroll-behavior: smooth; }
+  body { margin: 0; color: var(--ink); background: var(--paper); font-family: var(--sans); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  body.leaving main, body.leaving footer { opacity: 0; transition: opacity .22s ease; }
+  main, footer { animation: page-in .5s ease both; }
+  @keyframes page-in { from { opacity: 0; } }
+  button, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  .mono { font-family: var(--mono); }
+
+  /* 머리말: 왼쪽 로고, 가운데 메뉴, 오른쪽 지역 */
+  .top {
+    position: sticky; top: 0; z-index: 20; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px;
+    height: 68px; padding: 0 32px; background: rgba(250, 250, 251, .86); backdrop-filter: blur(12px); border-bottom: 1px solid var(--hair);
+  }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.12rem; letter-spacing: -0.01em; color: inherit; text-decoration: none; justify-self: start; }
+  /* 로고: 해에 가려져 가늘게 남은 초승달. 바깥쪽에 지금 시간대 색이 은은하게 번짐 */
+  .brand svg { width: 26px; height: 26px; overflow: visible; filter: drop-shadow(-1px 1px 3px color-mix(in srgb, var(--s-dot) 70%, transparent)); transition: filter 1.8s; }
+  .nav { display: flex; gap: 6px; }
+  .nav a { position: relative; padding: 8px 14px; color: var(--sub); text-decoration: none; font-size: 0.95rem; font-weight: 500; transition: color .2s; }
+  .nav a::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: 2px; height: 1px; background: var(--ink); transform: scaleX(0); transform-origin: left; transition: transform .35s cubic-bezier(.2, .8, .2, 1); }
+  .nav a:hover { color: var(--ink); }
+  .nav a:hover::after, .nav a[aria-current="page"]::after { transform: scaleX(1); }
+  .nav a[aria-current="page"] { color: var(--ink); }
+  .where { display: flex; gap: 8px; align-items: center; justify-self: end; }
+  .where select {
+    height: 36px; padding: 0 30px 0 12px; border: 1px solid var(--hair-strong); border-radius: 4px; background: #fff; cursor: pointer;
+    font-family: var(--mono); font-size: 0.85rem; appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--sub) 50%), linear-gradient(135deg, var(--sub) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 15px, calc(100% - 10px) 15px; background-size: 5px 5px; background-repeat: no-repeat;
+    transition: border-color .2s;
+  }
+  .where select:hover { border-color: var(--ink); }
+  .phase { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid var(--hair); border-radius: 4px; font-family: var(--mono); font-size: 0.8rem; color: var(--sub); white-space: nowrap; }
+  .phase i { width: 9px; height: 9px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff, var(--s-dot) 60%); box-shadow: 0 0 0 3px color-mix(in srgb, var(--s-dot) 25%, transparent); }
+  @media (max-width: 900px) {
+    .top { grid-template-columns: 1fr auto; height: auto; padding: 12px 16px; row-gap: 8px; }
+    .nav { grid-column: 1 / -1; grid-row: 2; overflow-x: auto; }
+    .phase span { display: none; }
+  }
+
+  /* 화면 틀: 양옆 가는 세로선 */
+  .frame { max-width: 1360px; margin: 0 auto; border-left: 1px solid var(--hair); border-right: 1px solid var(--hair); }
+  .pad { padding: 0 64px; }
+  @media (max-width: 760px) { .pad { padding: 0 20px; } }
+
+  /* 첫머리: 가운데 정렬 세리프 제목 */
+  .hero { text-align: center; padding: 88px 24px 48px; }
+  .label { font-family: var(--mono); font-size: 0.8rem; color: var(--sub); letter-spacing: 0.01em; }
+  .hero h1, .serif-h { font-family: var(--serif); font-weight: 500; letter-spacing: -0.02em; word-break: keep-all; }
+  .hero h1 { margin: 14px auto 18px; font-size: clamp(2.1rem, 5vw, 3.6rem); line-height: 1.22; max-width: 15em; }
+  .hero p { margin: 0 auto; color: var(--sub); font-size: 1.06rem; max-width: 34em; }
+  .btn-row { display: flex; gap: 8px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
+  .btn {
+    height: 38px; padding: 0 18px; border: 1px solid var(--hair-strong); border-radius: 4px; background: #fff; cursor: pointer;
+    font-family: var(--mono); font-size: 0.85rem; transition: border-color .2s, background-color .2s, transform .2s;
+  }
+  .btn:hover { border-color: var(--ink); }
+  .btn:active { transform: translateY(1px); }
+  .btn.solid { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .btn.solid:hover { background: #2a2c33; }
+
+  /* 하늘 판: 시간대 색이 흐르는 무지갯빛 판 + 흰 십자 표시 */
+  .sky {
+    position: relative; overflow: hidden; margin: 0 24px; border-radius: 16px; color: #fff; background: var(--s-base);
+    isolation: isolate; min-height: 520px;
+  }
+  .sky .blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .9; z-index: -2; will-change: transform; transition: translate 1.4s cubic-bezier(.2, .8, .2, 1); }
+  .sky .b1 { width: 62%; height: 80%; left: -8%; top: 20%; background: var(--s1); animation: wander1 22s ease-in-out infinite alternate; }
+  .sky .b2 { width: 55%; height: 70%; right: -6%; top: -15%; background: var(--s2); animation: wander2 26s ease-in-out infinite alternate; }
+  .sky .b3 { width: 40%; height: 55%; left: 35%; bottom: -25%; background: var(--s3); animation: wander3 30s ease-in-out infinite alternate; }
+  @keyframes wander1 { to { transform: translate(18%, -12%) scale(1.15); } }
+  @keyframes wander2 { to { transform: translate(-16%, 14%) scale(.9); } }
+  @keyframes wander3 { to { transform: translate(-20%, -18%) scale(1.2); } }
+  .sky .grain {
+    position: absolute; inset: 0; z-index: -1; opacity: .18; mix-blend-mode: overlay; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .sky .corner { position: absolute; width: 18px; height: 18px; border-color: rgba(255, 255, 255, .7); border-style: solid; border-width: 0; z-index: 0; }
+  .sky .corner.tl { top: 22px; left: 22px; border-top-width: 1px; border-left-width: 1px; }
+  .sky .corner.tr { top: 22px; right: 22px; border-top-width: 1px; border-right-width: 1px; }
+  .sky .corner.bl { bottom: 22px; left: 22px; border-bottom-width: 1px; border-left-width: 1px; }
+  .sky .corner.br { bottom: 22px; right: 22px; border-bottom-width: 1px; border-right-width: 1px; }
+  .sky .crosses { position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .35;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='104' height='104'%3E%3Cpath d='M52 46v12M46 52h12' stroke='white' stroke-width='1'/%3E%3C/svg%3E");
+    -webkit-mask-image: radial-gradient(60% 60% at 50% 50%, #000, transparent 75%); mask-image: radial-gradient(60% 60% at 50% 50%, #000, transparent 75%);
+  }
+  .sky-inner { position: relative; padding: 40px; }
+  .sky-tag { position: absolute; top: 26px; left: 52px; font-family: var(--mono); font-size: 0.78rem; opacity: .85; }
+  .sky-tag.r { left: auto; right: 52px; }
+  @media (max-width: 760px) { .sky { margin: 0 12px; min-height: 420px; } .sky-inner { padding: 24px 12px; } .sky-tag { left: 34px; } .sky-tag.r { right: 34px; } }
+
+  /* ✳ 구분 띠 */
+  .band { display: grid; grid-template-columns: repeat(4, 1fr); height: 62px; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); margin-top: 56px; }
+  .band span { position: relative; }
+  .band span::before { content: ""; position: absolute; left: 62px; right: 14px; top: 50%; height: 1px; background: var(--hair-strong); }
+  .band span::after {
+    content: ""; position: absolute; left: 18px; top: 50%; width: 30px; height: 30px; margin-top: -15px; opacity: .6;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Cpath d='M15 2v26M2 15h26M6 6l18 18M24 6L6 24' stroke='%23b8bbc2' stroke-width='1'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  .band.dark { background: var(--dark); border-color: var(--dark-hair); margin-top: 0; }
+  .band.dark span::before { background: var(--dark-hair); }
+
+  /* 큰 숫자 칸 */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--hair); }
+  .stat { padding: 40px 24px; text-align: center; border-right: 1px solid var(--hair); }
+  .stat:last-child { border-right: 0; }
+  .stat b { display: block; font-size: clamp(2rem, 4vw, 2.8rem); font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat span { display: block; margin-top: 8px; font-family: var(--mono); font-size: 0.8rem; color: var(--sub); }
+  @media (max-width: 640px) { .stats { grid-template-columns: 1fr; } .stat { border-right: 0; border-bottom: 1px solid var(--hair); } }
+
+  /* 검은 섹션: 왼쪽 제목, 오른쪽 목록 */
+  .dark { background: var(--dark); color: #f2f3f5; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .split > .side { padding: 72px 48px; border-right: 1px solid var(--dark-hair); }
+  .split > .side .stick { position: sticky; top: 120px; text-align: center; }
+  .split h2 { margin: 12px 0 14px; font-size: clamp(1.8rem, 3.4vw, 2.6rem); line-height: 1.25; }
+  .split .side p { color: var(--dark-sub); max-width: 26em; margin: 0 auto; }
+  .split .label { color: var(--dark-sub); }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } .split > .side { border-right: 0; border-bottom: 1px solid var(--dark-hair); padding: 48px 20px; } }
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .rows > li { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 20px; align-items: start; padding: 28px 40px; border-bottom: 1px solid var(--dark-hair); transition: background-color .3s; }
+  .rows > li:hover { background: rgba(255, 255, 255, .03); }
+  .rows > li:last-child { border-bottom: 0; }
+  .ibox { width: 56px; height: 56px; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, .18); color: #d9dbe1; }
+  .ibox svg { width: 26px; height: 26px; }
+  .rows h3 { margin: 2px 0 4px; font-size: 1.12rem; font-weight: 600; letter-spacing: -0.01em; }
+  .rows h3 .t { font-family: var(--mono); font-weight: 500; margin-right: 10px; }
+  .rows p { margin: 0; color: var(--dark-sub); font-size: 0.95rem; }
+  .rows li.past { opacity: .45; }
+  .chip { font-family: var(--mono); font-size: 0.75rem; padding: 4px 10px; border: 1px solid rgba(255, 255, 255, .2); white-space: nowrap; color: var(--dark-sub); }
+  .chip.now { background: #fff; color: var(--dark); border-color: #fff; }
+  @media (max-width: 640px) { .rows > li { grid-template-columns: 44px minmax(0, 1fr); padding: 22px 20px; } .ibox { width: 44px; height: 44px; } .rows .chip { grid-column: 2; justify-self: start; } }
+
+  /* 빈 상태 (하늘 판 안) */
+  .empty { min-height: 520px; display: grid; place-items: center; text-align: center; padding: 60px 24px; }
+  .empty h2 { margin: 12px 0 8px; font-family: var(--serif); font-weight: 500; font-size: clamp(1.8rem, 4vw, 2.6rem); }
+  .empty p { margin: 0 auto; opacity: .85; max-width: 30em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 28px; max-width: 760px; }
+  .chips button {
+    padding: 7px 14px; border: 1px solid rgba(255, 255, 255, .45); border-radius: 4px; background: rgba(255, 255, 255, .08); color: #fff;
+    cursor: pointer; font-family: var(--mono); font-size: 0.85rem; transition: background-color .2s, color .2s, transform .2s;
+  }
+  .chips button:hover { background: #fff; color: var(--ink); }
+  .chips button:active { transform: translateY(1px); }
+
+  .loading { min-height: 520px; display: grid; place-items: center; font-family: var(--mono); font-size: 0.9rem; opacity: .9; }
+  .loading span::after { content: ""; display: inline-block; width: 1.2em; text-align: left; animation: dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+  .error { margin: 24px; padding: 18px 20px; border: 1px solid #f1b4b4; background: #fff5f5; color: #a32020; border-radius: 6px; font-size: 0.95rem; }
+  .sky .error { background: rgba(255, 255, 255, .92); }
+  .error button { margin-left: 8px; height: 30px; padding: 0 12px; border: 1px solid currentColor; border-radius: 4px; background: #fff; cursor: pointer; font-family: var(--mono); font-size: 0.8rem; }
+
+  /* 스크롤하면 조용히 나타남 */
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity .8s ease, transform .8s cubic-bezier(.2, .8, .2, 1); transition-delay: var(--d, 0s); }
+  .reveal.on { opacity: 1; transform: none; }
+
+  /* 맨 아래 */
+  footer.frame { padding: 40px 64px 56px; border-top: 1px solid var(--hair); }
+  @media (max-width: 760px) { footer.frame { padding: 32px 20px 40px; } }
+  .source { margin: 0; font-size: 0.85rem; color: var(--sub); max-width: 62em; }
+  .source a { color: inherit; }
+  .api-box { margin-top: 16px; border: 1px solid var(--hair); border-radius: 6px; background: #fff; font-size: 0.85rem; }
+  .api-box summary { padding: 12px 16px; cursor: pointer; font-family: var(--mono); font-size: 0.82rem; }
+  .api-box summary small { color: var(--sub); }
+  .api-box .api-body { padding: 0 16px 14px; border-top: 1px solid var(--hair); }
+  .api-box strong { display: block; margin-top: 12px; font-size: 0.85rem; }
+  .api-box code { display: block; word-break: break-all; color: var(--sub); font-family: var(--mono); font-size: 0.75rem; }
+  .api-box a { color: var(--ink); font-family: var(--mono); font-size: 0.78rem; }
+
+  @media (prefers-reduced-motion: reduce) {
+    :root { transition: none; }
+    .sky .blob, main, footer { animation: none; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    body.leaving main, body.leaving footer { opacity: 1; }
+  }
+
+  /* ───── 이 화면: 해는 어디쯤 ───── */
+  .dome-wrap { padding: 84px 40px 28px; }
+  .dome { width: 100%; max-width: 1000px; display: block; margin: 0 auto; overflow: visible; }
+  .dome text { fill: rgba(255, 255, 255, .85); font-family: var(--mono); font-size: 13px; }
+  .dome .dir { fill: #fff; font-size: 14px; }
+  .dome .tm { fill: #fff; font-size: 13px; }
+  .dome .nowt { fill: #fff; font-size: 13px; font-weight: 500; }
+  .glow { filter: drop-shadow(0 0 8px rgba(255, 255, 255, .95)); }
+  .say { text-align: center; padding: 64px 24px 0; }
+  .say p { margin: 0 auto; max-width: 22em; font-family: var(--serif); font-weight: 500; font-size: clamp(1.4rem, 3vw, 2.1rem); line-height: 1.45; letter-spacing: -0.01em; word-break: keep-all; }
+  .say b { font-weight: 600; background: linear-gradient(transparent 64%, color-mix(in srgb, var(--s-dot) 38%, transparent) 64%); }
+  .times { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid var(--hair); }
+  .time { padding: 36px 24px 32px; border-right: 1px solid var(--hair); transition: background-color .3s; }
+  .time:last-child { border-right: 0; }
+  .time:hover { background: #fff; }
+  .time .label { display: flex; justify-content: space-between; gap: 8px; }
+  .time b { display: block; margin: 18px 0 4px; font-size: clamp(2rem, 3.4vw, 2.6rem); font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .time .dirx { color: var(--ink); font-weight: 500; }
+  .time .shadow { margin: 18px 0 0; padding-top: 14px; border-top: 1px dashed var(--hair-strong); font-size: 0.86rem; color: var(--sub); }
+  .time.peak { background: #fff; }
+  .time.peak b::after { content: " ★"; font-size: 0.5em; vertical-align: super; color: var(--faint); }
+  @media (max-width: 1000px) { .times { grid-template-columns: repeat(2, minmax(0, 1fr)); } .time { border-bottom: 1px solid var(--hair); } }
+  @media (max-width: 520px) { .times { grid-template-columns: minmax(0, 1fr); } .time { border-right: 0; } }
+  .note-row { padding: 28px 64px 0; color: var(--sub); font-size: 0.92rem; max-width: 62em; }
+  @media (max-width: 760px) { .dome-wrap { padding: 64px 4px 16px; } .note-row { padding: 24px 20px 0; } }
+  .sweep { transform-box: fill-box; transform-origin: left center; animation: sweep 1.8s cubic-bezier(.4, .1, .2, 1) both; animation-delay: .3s; }
+  @keyframes sweep { from { transform: scaleX(0); } }
+  .pop { transform-box: fill-box; transform-origin: center; animation: pop .6s cubic-bezier(.3, 1.5, .5, 1) both; animation-delay: calc(.45s + var(--i) * .28s); }
+  @keyframes pop { from { transform: scale(0); opacity: 0; } }
+  .pulse { transform-box: fill-box; transform-origin: center; animation: pulse 2.6s ease-out infinite; }
+  @keyframes pulse { from { transform: scale(.7); opacity: .9; } to { transform: scale(1.8); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .sweep, .pop, .pulse { animation: none; } }
+
+  /* 한글이 들어간 작은 라벨은 Pretendard로 (고정폭 글꼴은 띄어쓰기가 넓어 보임). 숫자·시각만 고정폭 */
+  .label, .where select, .phase, .btn, .sky-tag, .chips button, .loading, .api-box summary, .legend, .cd .when, .dday small, .past-box summary {
+    font-family: var(--sans); letter-spacing: 0; font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="clock.html"><svg viewBox="0 0 28 28" aria-hidden="true"><defs><mask id="crescent"><rect width="28" height="28" fill="#fff"/><circle cx="18.6" cy="10" r="9.2" fill="#000"/></mask></defs><circle cx="14" cy="14" r="10.5" fill="currentColor" mask="url(#crescent)"/></svg>하늘노트</a>
+  <nav class="nav" aria-label="하늘노트 화면"><a href="clock.html">하늘 시계</a><a href="sun.html" aria-current="page">해는 어디쯤</a><a href="calendar.html">천문 달력</a></nav>
+  <div class="where">
+    <select id="loc" aria-label="지역"></select>
+    <span class="phase" id="phase" role="status"><i aria-hidden="true"></i>지역을 골라 주세요</span>
+  </div>
+</header>
+
+<main class="frame">
+  <section class="hero">
+    <div class="label reveal">태양 고도</div>
+    <h1 class="reveal">지금 해는<br>어디쯤 있을까요?</h1>
+    <p class="reveal">남쪽을 바라보고 섰을 때의 하늘을 반원 돔으로 그렸어요. 왼쪽이 동쪽, 가운데가 남쪽, 오른쪽이 서쪽이에요.</p>
+  </section>
+  <div id="view"></div>
+</main>
+
+<footer class="frame">
+  <p class="source">자료: <a href="https://www.data.go.kr/tcs/dss/selectDataSetList.do?keyword=%ED%95%9C%EA%B5%AD%EC%B2%9C%EB%AC%B8%EC%97%B0%EA%B5%AC%EC%9B%90" target="_blank" rel="noopener">한국천문연구원 태양고도·출몰시각 정보</a> (공공데이터포털). 지금 위치는 9·12·15·18시 값 사이를 이어서 어림한 거예요.</p>
+  <details class="api-box">
+    <summary>🔌 이 화면이 쓰는 API 보기 <small id="api-count"></small></summary>
+    <div class="api-body">
+      <div id="api-list"><code>아직 부른 API가 없어요.</code></div>
+      <p><small>🔑 화면에는 키를 가렸지만, 링크와 F12 → Network 탭에서는 키가 보여요. 이 화면은 내 컴퓨터에서만 쓰세요.</small></p>
+    </div>
+  </details>
+</footer>
+
+<script>
+  // ───── 하늘노트 공통 (세 화면이 똑같이 씀) ─────
+  const REGIONS = ["서울", "인천", "수원", "춘천", "강릉", "속초", "원주", "대전", "세종", "청주", "천안", "홍성", "전주", "광주", "목포", "여수", "대구", "안동", "포항", "울산", "부산", "창원", "제주", "서귀포", "울릉도", "독도", "백령도"];
+  const PHASES = { dawn: "새벽 시간", day: "낮 시간", dusk: "노을 시간", night: "밤 시간" };
+  const calm = matchMedia("(prefers-reduced-motion: reduce)").matches; // 컴퓨터에서 "애니메이션 줄이기"를 켰는지
+  const calls = {};
+
+  // API에서 온 글자를 화면에 그대로 넣지 않도록 바꿔 줌
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function hasKey() {
+    return typeof CONFIG !== "undefined" && CONFIG.SERVICE_KEY && !CONFIG.SERVICE_KEY.includes("여기에");
+  }
+  function withKey(url) {
+    return url + "&serviceKey=" + encodeURIComponent(CONFIG.SERVICE_KEY);
+  }
+  // 🔌 상자: 이름별로 마지막에 부른 주소를 보여 줌 (키는 가림)
+  function showApi(label, url) {
+    calls[label] = url;
+    document.getElementById("api-list").innerHTML = Object.entries(calls).map(([l, u]) => `
+      <strong>${esc(l)}</strong>
+      <code>${esc(u.replace(/serviceKey=[^&]*/, "serviceKey=🔑(숨김)"))}</code>
+      <a href="${esc(u)}" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기 ↗</a>`).join("");
+    document.getElementById("api-count").textContent = `(${Object.keys(calls).length}종류)`;
+  }
+  async function getJson(url, retry = 2) {
+    const res = await fetch(url); // 🔌 API 호출
+    // 공공데이터포털은 가끔 504(서버 시간 초과)를 줌 → 잠깐 쉬고 다시 부름
+    if (res.status >= 500 && retry > 0) {
+      await new Promise(ok => setTimeout(ok, 800));
+      return getJson(url, retry - 1);
+    }
+    if (!res.ok) throw new Error("응답 코드 " + res.status);
+    const data = await res.json();
+    if (data.OpenAPI_ServiceResponse) throw new Error(data.OpenAPI_ServiceResponse.cmmMsgHeader?.returnAuthMsg || "API 오류");
+    if (data.response?.header?.resultCode !== "00") throw new Error(data.response?.header?.resultMsg || "API 오류");
+    return data.response.body;
+  }
+
+  const pad = n => String(n).padStart(2, "0");
+  const ymd = d => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const WEEK = "일월화수목금토";
+  // "0646  " 또는 "121647" → 하루 중 몇 분째인지 (없으면 null)
+  function toMin(s) {
+    const t = String(s ?? "").trim();
+    if (!/^\d{4}/.test(t)) return null;
+    return +t.slice(0, 2) * 60 + +t.slice(2, 4);
+  }
+  const hhmm = m => m == null ? "--:--" : `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
+  const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+  function dur(m) {
+    const h = Math.floor(m / 60), r = m % 60;
+    return h ? (r ? `${h}시간 ${r}분` : `${h}시간`) : `${r}분`;
+  }
+
+  function getLoc() { try { return localStorage.getItem("sky-loc"); } catch { return null; } }
+  function setLoc(v) { try { localStorage.setItem("sky-loc", v); } catch {} }
+
+  // 출몰시각 (같은 지역·날짜는 이 브라우저에 기억해 두고 다시 안 부름)
+  async function loadRiseSet(loc, date) {
+    const url = withKey(API.RISE + `&location=${encodeURIComponent(loc)}&locdate=${ymd(date)}`);
+    showApi("출몰시각", url);
+    const key = `sky-rs-${loc}-${ymd(date)}`;
+    try { const c = JSON.parse(localStorage.getItem(key)); if (c) return c; } catch {}
+    const body = await getJson(url);
+    const item = [].concat(body.items?.item || [])[0];
+    if (!item) throw new Error("이 지역의 출몰시각이 없어요");
+    try { localStorage.setItem(key, JSON.stringify(item)); } catch {}
+    return item;
+  }
+
+  // 지금이 새벽·낮·노을·밤 중 언제인지 (출몰시각 기준)
+  function phaseOf(rs, m = nowMin()) {
+    const t = k => toMin(rs[k]);
+    if (m >= t("nautm") && m < t("sunrise") + 30) return "dawn";
+    if (m >= t("sunrise") + 30 && m < t("sunset") - 60) return "day";
+    if (m >= t("sunset") - 60 && m < t("naute")) return "dusk";
+    return "night";
+  }
+  // 지역을 아직 안 골랐을 때는 시계로 대충 맞춤
+  function roughPhase(m = nowMin()) {
+    if (m >= 300 && m < 420) return "dawn";
+    if (m >= 420 && m < 1020) return "day";
+    if (m >= 1020 && m < 1140) return "dusk";
+    return "night";
+  }
+  function applyPhase(key, loc) {
+    document.documentElement.dataset.phase = key;
+    try { localStorage.setItem("sky-phase", key); } catch {}
+    document.getElementById("phase").innerHTML = `<i aria-hidden="true"></i><span>${loc ? `${esc(loc)} · ` : ""}</span>${PHASES[key]}${loc ? "" : " (대략)"}`;
+  }
+
+  function setupLocSelect(onChange) {
+    const sel = document.getElementById("loc");
+    const cur = getLoc();
+    sel.innerHTML = `<option value="" ${cur ? "" : "selected"} disabled>지역 고르기</option>` +
+      REGIONS.map(r => `<option ${r === cur ? "selected" : ""}>${r}</option>`).join("");
+    sel.onchange = () => { setLoc(sel.value); onChange(); };
+  }
+
+  // 하늘 판: 흐르는 빛 덩어리 + 종이 결 + 십자 표시 + 모서리 표시
+  function sky(inner, tags = "", cls = "reveal") {
+    return `<section class="sky ${cls}">
+      <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+      <div class="grain"></div><div class="crosses"></div>
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      ${tags}${inner}
+    </section>`;
+  }
+  function emptyHtml(what) {
+    return sky(`<div class="empty">
+      <div>
+        <div class="label" style="color:#fff;opacity:.8">지역을 아직 고르지 않았어요</div>
+        <h2>어느 하늘을 볼까요?</h2>
+        <p>지역을 고르면 ${what}. 고른 지역은 하늘노트의 다른 화면에서도 그대로 쓰여요.</p>
+        <div class="chips">${REGIONS.map(r => `<button type="button" data-loc="${r}">${r}</button>`).join("")}</div>
+      </div>
+    </div>`);
+  }
+  function bindEmpty(onChange) {
+    document.querySelectorAll("[data-loc]").forEach(b => b.onclick = () => {
+      setLoc(b.dataset.loc);
+      document.getElementById("loc").value = b.dataset.loc;
+      onChange();
+    });
+  }
+  const loadingHtml = msg => sky(`<div class="loading" role="status"><span>${msg}</span></div>`);
+  function errorHtml(title, err, retry) {
+    return `<div class="error" role="alert">${title} 인터넷 연결이나 config.js의 키, 맨 위 🔌 주소를 확인해 주세요. <small>(${esc(err.message)})</small><button type="button" onclick="${retry}">다시 시도</button></div>`;
+  }
+  const keyMissing = () => `<div class="error" role="alert">인증키가 없어요. 같은 폴더의 config.js에 공공데이터포털 인증키를 넣고 저장해 주세요.</div>`;
+
+  // 가는 선 아이콘 (검은 섹션 네모 칸 안에 들어감)
+  const ICON = {
+    rise: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3 19h20M7 19a6 6 0 0 1 12 0M13 3v6M10 6l3-3 3 3"/></svg>`,
+    set: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3 19h20M7 19a6 6 0 0 1 12 0M13 3v6M10 6l3 3 3-3"/></svg>`,
+    sun: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="13" cy="13" r="4.5"/><path d="M13 2.5v3M13 20.5v3M2.5 13h3M20.5 13h3M5.6 5.6l2.1 2.1M18.3 18.3l2.1 2.1M5.6 20.4l2.1-2.1M18.3 7.7l2.1-2.1"/></svg>`,
+    moon: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M18.5 16.5A8 8 0 0 1 9.5 4a8.5 8.5 0 1 0 9 12.5z"/></svg>`,
+    twilight: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3 17h20M6 21h14M9 13h8M12 9h2"/></svg>`,
+    star: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M13 3l2.4 7.6L23 13l-7.6 2.4L13 23l-2.4-7.6L3 13l7.6-2.4z"/></svg>`,
+    comet: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="18" cy="8" r="3"/><path d="M15.5 10.5L4 22M13 8L5 16M18 13l-6 6"/></svg>`,
+    planet: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="13" cy="13" r="5.5"/><ellipse cx="13" cy="13" rx="11" ry="3.5" transform="rotate(-20 13 13)"/></svg>`,
+    pair: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="9" cy="14" r="5"/><circle cx="18.5" cy="9" r="2.5"/></svg>`,
+    season: `<svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="13" cy="13" r="9"/><path d="M13 4v18M4 13h18"/></svg>`,
+  };
+
+  // ───── 움직임 (조용하게) ─────
+  // 스크롤해서 보이면 조용히 떠오름
+  const io = "IntersectionObserver" in window && !calm
+    ? new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("on"); io.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" })
+    : null;
+  function watchReveal(root = document) {
+    root.querySelectorAll(".reveal:not(.on)").forEach((el, i) => {
+      if (!io) { el.classList.add("on"); return; }
+      el.style.setProperty("--d", `${Math.min(i, 6) * 0.07}s`);
+      io.observe(el);
+    });
+  }
+  // 하늘 판 위에서 마우스를 움직이면 빛 덩어리가 살짝 따라옴
+  document.addEventListener("pointermove", e => {
+    if (calm) return;
+    const s = e.target.closest?.(".sky");
+    if (!s) return;
+    const r = s.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
+    s.style.setProperty("--px", `${x * 30}px`);
+    s.style.setProperty("--py", `${y * 30}px`);
+    s.querySelectorAll(".blob").forEach((b, i) => { b.style.translate = `${x * (24 + i * 14)}px ${y * (24 + i * 14)}px`; });
+  });
+  // 다른 화면으로 갈 때: 내용만 살짝 흐려졌다가 이동
+  document.addEventListener("click", e => {
+    const a = e.target.closest(".nav a, .brand");
+    if (!a || calm || a.getAttribute("aria-current") === "page" || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    document.body.classList.add("leaving");
+    setTimeout(() => { location.href = a.href; }, 220);
+  });
+  watchReveal(document);
+
+  // ───── 이 화면: 해는 어디쯤 ─────
+  const view = document.getElementById("view");
+  let last = null; // 마지막으로 받은 값 (5분마다 다시 그릴 때 씀)
+  const DIRS = ["북", "북북동", "북동", "동북동", "동", "동남동", "남동", "남남동", "남", "남남서", "남서", "서남서", "서", "서북서", "북서", "북북서"];
+  const dirName = az => DIRS[Math.round(az / 22.5) % 16];
+  // "41˚ 46´" → 41.77, "- 3˚ 16´" → -3.27
+  function deg(s) {
+    const t = String(s ?? "").replace(/\s/g, "");
+    const m = t.match(/(-?)(\d+)˚(\d+)?/);
+    if (!m) return null;
+    const v = +m[2] + (+m[3] || 0) / 60;
+    return m[1] ? -v : v;
+  }
+
+  async function loadAlt(loc, date) {
+    const url = withKey(API.ALT + `&location=${encodeURIComponent(loc)}&locdate=${ymd(date)}`);
+    showApi("태양고도", url);
+    const body = await getJson(url);
+    const it = [].concat(body.items?.item || [])[0];
+    if (!it) throw new Error("이 지역의 태양고도 정보가 없어요");
+    return it;
+  }
+
+  async function render() {
+    const loc = getLoc();
+    if (!loc) {
+      applyPhase(roughPhase(), null);
+      view.innerHTML = emptyHtml("그 지역에서 오늘 해가 지나가는 길을 그려 드려요");
+      bindEmpty(render);
+      watchReveal(view);
+      return;
+    }
+    if (!hasKey()) { view.innerHTML = keyMissing(); return; }
+    view.innerHTML = loadingHtml(`${esc(loc)} 하늘에서 해를 찾는 중`);
+    watchReveal(view);
+    const today = new Date();
+    // 하늘색과 해 위치를 따로 부름 (하나가 실패해도 다른 하나는 보임)
+    const [rsR, altR] = await Promise.allSettled([loadRiseSet(loc, today), loadAlt(loc, today)]);
+    const rs = rsR.status === "fulfilled" ? rsR.value : null;
+    applyPhase(rs ? phaseOf(rs) : roughPhase(), loc);
+    if (altR.status === "rejected") {
+      view.innerHTML = errorHtml("해의 위치를 불러오지 못했어요.", altR.reason, "render()");
+      return;
+    }
+    last = { alt: altR.value, rs, loc };
+    draw(altR.value, rs, loc, true);
+  }
+
+  function draw(a, rs, loc, animate) {
+    const rv = animate ? "reveal" : "reveal on";
+    const move = animate && !calm;
+    const transitMin = rs ? toMin(rs.suntransit) : 12 * 60 + 20;
+    const pts = [
+      { key: "09:00", label: "오전 9시", m: 540, alt: deg(a.altitude_09), az: deg(a.azimuth_09) },
+      { key: "12:00", label: "낮 12시", m: 720, alt: deg(a.altitude_12), az: deg(a.azimuth_12) },
+      { key: hhmm(transitMin), label: "가장 높을 때", m: transitMin, alt: deg(a.altitudeMeridian), az: 180, top: true },
+      { key: "15:00", label: "오후 3시", m: 900, alt: deg(a.altitude_15), az: deg(a.azimuth_15) },
+      { key: "18:00", label: "저녁 6시", m: 1080, alt: deg(a.altitude_18), az: deg(a.azimuth_18) },
+    ].filter(p => p.alt != null && p.az != null).sort((p, q) => p.m - q.m);
+
+    // 돔: 남쪽을 보고 선 하늘 (가로 = 방향, 세로 = 높이)
+    const W = 900, H = 400, CX = W / 2, R = 380;
+    const proj = (alt, az) => {
+      const al = Math.max(alt, -5) * Math.PI / 180, z = (az - 180) * Math.PI / 180;
+      return [CX + R * Math.cos(al) * Math.sin(z), H - R * Math.sin(al)];
+    };
+    const f = n => n.toFixed(1);
+    // 해가 지나가는 길: 점들을 부드럽게 이음
+    const xy = pts.map(p => proj(p.alt, p.az));
+    let path = `M${f(xy[0][0])} ${f(xy[0][1])}`;
+    for (let i = 0; i < xy.length - 1; i++) {
+      const p0 = xy[i - 1] || xy[i], p1 = xy[i], p2 = xy[i + 1], p3 = xy[i + 2] || p2;
+      path += ` C${f(p1[0] + (p2[0] - p0[0]) / 6)} ${f(p1[1] + (p2[1] - p0[1]) / 6)} ${f(p2[0] - (p3[0] - p1[0]) / 6)} ${f(p2[1] - (p3[1] - p1[1]) / 6)} ${f(p2[0])} ${f(p2[1])}`;
+    }
+    // 높이 30°·60° 줄과 남동·남서 방향 줄 (도면처럼 가는 선)
+    const alts = [30, 60].map(g => {
+      const y = H - R * Math.sin(g * Math.PI / 180), hw = R * Math.cos(g * Math.PI / 180);
+      return `<line x1="${f(CX - hw)}" y1="${f(y)}" x2="${f(CX + hw)}" y2="${f(y)}" stroke="#fff" stroke-opacity=".3" stroke-dasharray="3 6"/>
+        <text x="${f(CX - hw + 10)}" y="${f(y - 8)}">${g}°</text>`;
+    }).join("");
+    const meridians = [135, 180, 225].map(az => {
+      const d = Array.from({ length: 19 }, (_, k) => proj(k * 5, az)).map(([x, y], k) => `${k ? "L" : "M"}${f(x)} ${f(y)}`).join(" ");
+      return `<path d="${d}" fill="none" stroke="#fff" stroke-opacity=".18"/>`;
+    }).join("");
+    const dirs = [[90, "동 E"], [135, "남동 SE"], [180, "남 S"], [225, "남서 SW"], [270, "서 W"]].map(([az, n]) => {
+      const [x] = proj(0, az);
+      return `<line x1="${f(x)}" y1="${H}" x2="${f(x)}" y2="${H + 10}" stroke="#fff"/><text x="${f(x)}" y="${H + 32}" text-anchor="middle" class="dir">${n}</text>`;
+    }).join("");
+    const transit = pts.find(p => p.top);
+    const dots = pts.map((p, k) => {
+      const [x, y] = proj(p.alt, p.az);
+      const below = p.alt < 0;
+      const nearTop = !p.top && transit && Math.abs(p.az - transit.az) < 20;
+      const [lx, ly, anchor] = below ? [x - 16, y - 16, "end"] : nearTop ? [x, y + 30, "middle"] : [x, y - (p.top ? 24 : 18), "middle"];
+      return `<g class="${move ? "pop" : ""}" style="--i:${k}">
+        ${p.top ? `<circle cx="${f(x)}" cy="${f(y)}" r="16" fill="none" stroke="#fff" stroke-opacity=".6"/>` : ""}
+        <circle cx="${f(x)}" cy="${f(y)}" r="${p.top ? 8 : 6}" fill="${below ? "none" : "#fff"}" stroke="#fff" stroke-width="1.5" class="${below ? "" : "glow"}"/>
+        <text x="${f(lx)}" y="${f(ly)}" text-anchor="${anchor}" class="tm">${below ? "" : p.top ? `남중 ${p.key}` : p.key}</text>
+      </g>`;
+    }).join("");
+
+    // 지금 위치 어림: 아는 시각 사이를 이어서 계산
+    const now = nowMin();
+    let nowMark = "", say;
+    const i = pts.findIndex((p, k) => k < pts.length - 1 && now >= p.m && now <= pts[k + 1].m);
+    if (i >= 0) {
+      const p = pts[i], q = pts[i + 1], t = (now - p.m) / (q.m - p.m);
+      const alt = p.alt + (q.alt - p.alt) * t, az = p.az + (q.az - p.az) * t;
+      const [x, y] = proj(alt, az);
+      nowMark = `<circle cx="${f(x)}" cy="${f(y)}" r="20" fill="none" stroke="#fff" stroke-width="1.5" class="${calm ? "" : "pulse"}"/>
+        <circle cx="${f(x)}" cy="${f(y)}" r="5" fill="#fff" class="glow"/>
+        <text x="${f(x > CX ? x - 28 : x + 28)}" y="${f(y - 24)}" text-anchor="${x > CX ? "end" : "start"}" class="nowt">지금 ${hhmm(now)}</text>`;
+      say = alt > 0
+        ? `지금 해는 <b>${dirName(az)}쪽</b> 하늘,<br>땅에서 <b>${alt.toFixed(0)}°</b> 높이에 있어요.`
+        : `지금 해는 <b>${dirName(az)}쪽</b> 지평선 아래로<br>내려가고 있어요.`;
+    } else if (now < pts[0].m) {
+      say = rs && now < toMin(rs.sunrise) ? `아직 해가 뜨기 전이에요.<br>오늘 해는 <b>${hhmm(toMin(rs.sunrise))}</b>에 떠요.` : "해가 동쪽 낮은 곳에서<br>올라오는 중이에요.";
+    } else {
+      say = rs && now >= toMin(rs.sunset) ? `해가 이미 졌어요.<br>오늘 해는 <b>${hhmm(toMin(rs.sunset))}</b>에 졌어요.` : "해가 서쪽 낮은 곳으로<br>내려가고 있어요.";
+    }
+
+    const tags = `<span class="sky-tag">${esc(loc)} · 남쪽을 바라볼 때</span><span class="sky-tag r">남중고도 ${deg(a.altitudeMeridian).toFixed(1)}°</span>`;
+    view.innerHTML = `
+      ${sky(`<div class="dome-wrap">
+        <svg class="dome" viewBox="0 -10 ${W} ${H + 52}" role="img" aria-label="${esc(loc)} 오늘 해의 길. 가장 높을 때 ${deg(a.altitudeMeridian).toFixed(1)}도">
+          <defs><clipPath id="sweepClip"><rect class="${move ? "sweep" : ""}" x="0" y="-20" width="${W}" height="${H + 70}"/></clipPath></defs>
+          <path d="M${CX - R} ${H} A${R} ${R} 0 0 1 ${CX + R} ${H} Z" fill="#fff" fill-opacity=".06" stroke="#fff" stroke-opacity=".55"/>
+          ${meridians}${alts}
+          <line x1="${CX - R - 20}" y1="${H}" x2="${CX + R + 20}" y2="${H}" stroke="#fff"/>
+          ${dirs}
+          <path d="${path}" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round" clip-path="url(#sweepClip)"/>
+          ${dots}${nowMark}
+        </svg>
+      </div>`, tags, rv)}
+      <div class="say ${rv}"><p role="status">${say}</p></div>
+      <div class="band ${rv}"><span></span><span></span><span></span><span></span></div>
+      <div class="times">
+        ${pts.map(p => {
+          const sh = p.alt > 0.5 ? 1.7 / Math.tan(p.alt * Math.PI / 180) : null;
+          return `<article class="time ${rv} ${p.top ? "peak" : ""}">
+            <div class="label"><span>${p.label}</span><span>${p.key}</span></div>
+            <b>${p.alt.toFixed(1)}°</b>
+            <div class="dirx">${dirName(p.az)}쪽 · <span class="mono">${p.az.toFixed(0)}°</span></div>
+            <p class="shadow">${sh == null ? "해가 지평선 아래라 그림자가 없어요." : sh > 30 ? "해가 아주 낮아 그림자가 길게 늘어져요." : `키 170cm 사람의 그림자 <span class="mono">${sh.toFixed(1)}m</span>`}</p>
+          </article>`;
+        }).join("")}
+      </div>
+      <p class="note-row ${rv}">큰 숫자는 해의 높이(고도), 그 아래는 해가 있는 방향(방위각)이에요. 방위각은 정북을 0°로 두고 시계 방향으로 재요. 해가 가장 높을 때의 높이를 남중고도라고 하고, 여름에는 높고 겨울에는 낮아서 그림자 길이도 계절마다 달라요.</p>`;
+    if (animate) watchReveal(view);
+  }
+
+  setupLocSelect(render);
+  render();
+  // 5분마다 지금 위치와 하늘색을 다시 그림 (API는 다시 안 부름)
+  setInterval(() => {
+    if (!last || last.loc !== getLoc()) return;
+    applyPhase(last.rs ? phaseOf(last.rs) : roughPhase(), last.loc);
+    draw(last.alt, last.rs, last.loc, false);
+  }, 5 * 60000);
+</script>
+</body>
+</html>
