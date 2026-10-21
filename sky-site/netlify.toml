@@ -1,0 +1,11 @@
+# 하늘노트 배포 설정
+# Netlify에서 Base directory를 sky-site 로 정하면 이 파일을 읽어요.
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# 사이트 첫 주소(/)로 들어오면 하늘 시계를 보여 줌
+[[redirects]]
+  from = "/"
+  to = "/clock.html"
+  status = 200
