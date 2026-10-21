@@ -135,6 +135,10 @@
   .summary h2 .dd { font-size: 1.7rem; }
   .summary p { margin: 2px 0 0; color: var(--ink-soft); }
   .warn { color: var(--red); font-weight: 600; }
+  .pending-note {
+    display: inline-block; margin-top: 8px !important; padding: 4px 12px; color: var(--ink) !important;
+    background: #fffbe0; border: 2px dashed var(--orange); border-radius: var(--hand-sm); font-weight: 600;
+  }
   .warn button, .error button {
     margin-left: 6px; padding: 2px 12px; border: 2px solid currentColor; border-radius: var(--hand-sm);
     background: #fff; cursor: pointer; font-weight: 700;
@@ -704,10 +708,13 @@
       if (c && c.day === today) return c.spots;
     } catch {}
     const spots = [];
-    for (const [label, url] of [["관광지 (경기)", API.TOUR_GG], ["관광지 (인천)", API.TOUR_IC]]) {
+    // 경기·인천을 동시에 받음
+    const lists = await Promise.all([["관광지 (경기)", API.TOUR_GG], ["관광지 (인천)", API.TOUR_IC]].map(([label, url]) => {
       const full = withKey(url);
       showApi(label, full);
-      const data = await getJson(full);
+      return getJson(full);
+    }));
+    for (const data of lists) {
       for (const it of data.response.body.items.item || []) {
         if (!it.mapx || !it.mapy) continue;
         spots.push({
@@ -861,7 +868,7 @@
       result.innerHTML = `<div class="error">인증키가 없어요. 같은 폴더의 config.js에 공공데이터포털 인증키를 넣고 저장해 주세요.</div>`;
       return;
     }
-    const step = msg => {
+    const step = (n, msg) => {
       if (my !== running) return;
       result.innerHTML = `
         <div class="loading" role="status">
@@ -869,12 +876,12 @@
             <path d="M4 62 H216" stroke="var(--ink-soft)" stroke-width="2" stroke-dasharray="8 9"/>
             <g class="runner"><use href="#d-car" x="0" y="14" width="80" height="47" style="filter:url(#wobble)"/></g>
           </svg>
-          ${msg}
+          <b>${n}/3</b> ${msg}
         </div>`;
     };
 
     // 1) 관광지 — 이게 없으면 추천을 못 함
-    step("서울 근교 관광지를 모으는 중이에요");
+    step(1, "서울 근교 관광지를 모으는 중이에요");
     let regions;
     try {
       regions = groupRegions(await loadTour(), pick.theme, from);
@@ -887,31 +894,41 @@
       return;
     }
 
-    // 2) 미세먼지 예보 — 실패해도 추천은 계속 (공기 점수는 비워 둠)
-    step("미세먼지 예보를 확인하는 중이에요");
+    // 2) 미세먼지 예보와 후보 10곳 날씨를 동시에 (각각 따로 실패할 수 있음)
+    step(2, `후보 ${regions.length}곳의 날씨와 미세먼지를 보는 중이에요`);
     let air = null, airErr = null;
-    try { air = await loadAir(dayDash); } catch (err) { airErr = err; }
-
-    // 3) 날씨 — 후보 10곳 각각 (따로 실패할 수 있음)
-    step(`후보 ${regions.length}곳의 날씨를 보는 중이에요`);
-    await Promise.all(regions.map(async r => {
-      try { r.weather = await loadWeather(r, day); } catch (err) { r.weatherErr = err; }
+    await Promise.all([
+      loadAir(dayDash).then(a => { air = a; }, err => { airErr = err; }),
+      ...regions.map(r => loadWeather(r, day).then(w => { r.weather = w; }, err => { r.weatherErr = err; })),
+    ]);
+    for (const r of regions) {
       const g = air?.[r.airArea];
       r.air = air ? (g ? { grade: g, pt: GRADE_PT[g] } : { grade: 0, pt: 15, none: true }) : null;
       r.pre = (r.weather?.pt ?? 20) + (r.air?.pt ?? 15);
-    }));
-
-    // 4) 충전소 — 날씨·공기 상위 5곳만 (호출 아끼기)
-    step("관광지 근처 급속 충전소를 찾는 중이에요");
+    }
     regions.sort((a, b) => b.pre - a.pre || a.km - b.km);
     const top5 = regions.slice(0, 5);
+
+    // 3) 날씨·공기 점수로 카드를 먼저 보여 주고, 충전소는 상위 5곳만 이어서 확인
+    if (my !== running) return;
+    for (const r of top5) r.chargePending = true;
+    drawResult({ regions, top5, fromName, day, airErr, pending: true });
+
     await Promise.all(top5.map(async r => {
       try { r.charge = await loadCharger(r); } catch (err) { r.chargeErr = err; }
+      r.chargePending = false;
     }));
     for (const r of regions) r.total = r.pre + (r.charge?.pt ?? (top5.includes(r) ? 15 : 0));
     top5.sort((a, b) => b.total - a.total || a.km - b.km); // 점수가 같으면 가까운 곳 먼저
 
     if (my !== running) return;
+    drawResult({ regions, top5, fromName, day, airErr, pending: false });
+  }
+
+  // 결과 그리기 — pending이면 충전 점수 빼고 날씨·공기 점수로 먼저 보여 줌
+  function drawResult({ regions, top5, fromName, day, airErr, pending }) {
+    const result = document.getElementById("result");
+    if (pending) for (const r of regions) r.total = r.pre;
     shown = top5.slice(0, 3);
     const rest = regions.filter(r => !shown.includes(r)).sort((a, b) => b.total - a.total || a.km - b.km);
     const themeName = THEMES.find(t => t[0] === pick.theme)[1];
@@ -920,6 +937,7 @@
       <div class="summary">
         <h2>${dd("star")}이번 드라이브는 여기 어때요?</h2>
         <p>${esc(fromName)}에서 출발해 ${day.getMonth() + 1}월 ${day.getDate()}일(${week})에 갈 만한 곳을, ${themeName} 테마 후보 ${regions.length}곳 중에서 골랐어요.</p>
+        ${pending ? `<p class="pending-note" role="status"><b>3/3</b> 근처 급속 충전소를 확인하는 중이에요. 확인이 끝나면 점수와 순서가 바뀔 수 있어요.</p>` : ""}
         ${airErr ? `<p class="warn">미세먼지 예보를 불러오지 못해서 공기 점수는 15점으로 계산했어요. (${esc(airErr.message)})<button onclick="recommend()">다시 시도</button></p>` : ""}
       </div>
       <div class="cards">${shown.map((r, i) => regionCard(r, i)).join("")}</div>
@@ -934,7 +952,7 @@
                 <td>${r.km}km</td>
                 <td>${r.weather ? `${r.weather.sky}, 비 ${r.weather.pop}%` : "—"}</td>
                 <td>${airText(r)}</td>
-                <td>${r.charge ? `${r.charge.free}대` : "—"}</td>
+                <td>${r.chargePending ? "확인 중" : r.charge ? `${r.charge.free}대` : "—"}</td>
                 <td class="num"><b>${r.total}</b></td>
               </tr>`).join("")}
             </tbody>
@@ -963,6 +981,11 @@
 
   function chargeHtml(r, i) {
     const c = r.charge;
+    if (r.chargePending) {
+      return `<li class="fact">${dd("bolt")}
+        <div><div class="v">충전소 확인 중…</div><div class="d">관광지 3km 안 급속 충전기를 세고 있어요</div></div>
+        <span class="pt">…/30</span></li>`;
+    }
     if (!c) {
       return `<li class="fact">${dd("bolt")}
         <div><div class="fail">충전소를 불러오지 못했어요</div><div class="d">${esc(r.chargeErr?.message)}</div></div>
@@ -1016,7 +1039,7 @@
           </div>
           <div class="grade-circle" aria-label="${r.total}점">
             <svg viewBox="0 0 82 66" aria-hidden="true"><path d="M44 5 C66 3 80 16 78 33 C76 52 58 62 38 61 C17 60 3 48 4 31 C5 15 20 5 40 6 C47 6 52 8 56 10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-            <span><b>${r.total}</b><small>점</small></span>
+            <span><b>${r.total}</b><small>${r.chargePending ? "점+" : "점"}</small></span>
           </div>
         </div>
         <ul class="facts">
