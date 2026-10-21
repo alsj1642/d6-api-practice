@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전기차 충전소 찾기</title>
+<!-- 🔑 인증키는 config.js에 따로 둠 (git에 안 올라감) -->
+<script src="config.js"></script>
+<script>
+  // 🔌 이 화면이 쓰는 API 주소는 전부 여기 한 곳에 모아 둠
+  const API = {
+    // 🔌 한국환경공단_전기자동차 충전소 정보 (공공데이터포털, 인증키 필요) — zcode=11 서울, zscode=구 코드, numOfRows=최대 개수
+    CHARGER: "https://apis.data.go.kr/B552584/EvCharger/getChargerInfo?dataType=JSON&pageNo=1&numOfRows=9999&zcode=11&zscode=",
+  };
+</script>
+<!-- 지도 그리는 도구 (Leaflet) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- 가까운 핀을 묶어 주는 도구 (MarkerCluster) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<style>
+  :root {
+    --bg: #f1f5f4;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --line: #dbe4e1;
+    --accent: #047857;
+    --soft: #e7f3ee;
+    --free: #059669;
+    --busy: #d97706;
+    --off: #6b7280;
+    --error-bg: #fef2f2;
+    --error-text: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1513;
+      --card: #17221f;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --line: #2a3a35;
+      --accent: #34d399;
+      --soft: #1d3029;
+      --free: #10b981;
+      --busy: #f59e0b;
+      --off: #9ca3af;
+      --error-bg: #3b1d1d;
+      --error-text: #fca5a5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 40px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 16px; }
+  button { font: inherit; cursor: pointer; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  select {
+    font: inherit; font-size: 1.05rem; padding: 10px 12px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  .chip {
+    padding: 8px 14px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  .chip.on { background: var(--text); color: var(--card); border-color: var(--text); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  .card > h2 { font-size: 1.15rem; margin: 0 0 4px; }
+  .card .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 12px; }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+
+  /* 상태: 색 + 글자 함께 */
+  .st { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: #fff; white-space: nowrap; }
+  .st.free { background: var(--free); }
+  .st.busy { background: var(--busy); }
+  .st.off { background: var(--off); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; font-size: 0.85rem; }
+
+  /* 지도 */
+  #map { height: 380px; border-radius: 12px; border: 1px solid var(--line); }
+  .pin {
+    display: inline-block; transform: translate(-50%, -50%);
+    padding: 2px 7px; border-radius: 999px; border: 2px solid #fff;
+    font: 700 12px/1.3 "Malgun Gothic", sans-serif; color: #fff; white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,.35);
+  }
+  .pin.free { background: var(--free); }
+  .pin.busy { background: var(--busy); }
+  .pin.off { background: var(--off); }
+  .pin.sel { outline: 3px solid var(--text); }
+  .group {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    width: 54px; height: 54px; border-radius: 50%; border: 3px solid #fff;
+    background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+    font: 700 13px/1.1 "Malgun Gothic", sans-serif;
+  }
+  .group small { font-size: 10px; font-weight: 600; }
+  .group.none { background: var(--off); }
+
+  /* 충전소 목록 */
+  .list { max-height: 260px; overflow-y: auto; margin-top: 12px; border-top: 1px solid var(--line); }
+  .list button {
+    display: flex; width: 100%; gap: 10px; align-items: center; text-align: left;
+    padding: 10px 4px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text);
+  }
+  .list button:hover, .list button.sel { background: var(--soft); }
+  .list .nm { flex: 1; min-width: 0; }
+  .list .nm small { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 충전 전 체크 카드 */
+  .check { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; }
+  .check > div { background: var(--soft); border-radius: 12px; padding: 12px; }
+  .check h3 { font-size: 0.85rem; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
+  .check p { margin: 0; }
+  .check .big { font-size: 1.1rem; font-weight: 700; }
+  .check .easy { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.9rem; }
+  th, td { padding: 8px 6px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+
+  /* 우리 동네 인프라 */
+  .story { font-size: 1.05rem; margin: 0 0 12px; }
+  .story b { color: var(--accent); }
+  .ratio { height: 14px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 6px 0 2px; }
+  .ratio span { display: block; height: 100%; background: var(--accent); }
+  .error {
+    background: var(--error-bg); color: var(--error-text);
+    border-radius: 12px; padding: 16px;
+  }
+  .error button {
+    margin-top: 8px; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid currentColor; background: transparent; color: inherit;
+  }
+  .source { margin-top: 12px; font-size: 0.85rem; color: var(--muted); text-align: center; }
+  .source a { color: var(--accent); }
+  .api-box {
+    margin-top: 24px; padding: 16px;
+    border: 1px dashed var(--line); border-radius: 12px;
+    font-size: 0.85rem; background: var(--card);
+  }
+  .api-box h2 { font-size: 1rem; margin: 0 0 8px; }
+  .api-box code { display: block; word-break: break-all; color: var(--muted); margin-bottom: 4px; }
+  .api-box a { color: var(--accent); display: inline-block; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>⚡ 전기차 충전소 찾기</h1>
+  <p class="lead">우리 구에서 지금 비어 있는 충전기를 찾고, 내 차로 쓸 수 있는지 확인해요.</p>
+
+  <div class="controls">
+    <select id="gu" aria-label="구 선택"></select>
+    <button class="chip" id="only-free">🟢 지금 빈 곳만</button>
+    <button class="chip" id="only-fast">⚡ 급속만</button>
+  </div>
+
+  <!-- 1. 지금 비어있는 충전소 찾기 -->
+  <section class="card">
+    <h2>📍 지금 비어 있는 충전소</h2>
+    <p class="sub" id="map-sub">⏳ 충전소를 불러오는 중…</p>
+    <div id="map-area"><div id="map"></div></div>
+    <div class="legend">
+      <span class="st free">빈 자리 있음</span>
+      <span class="st busy">모두 사용 중</span>
+      <span class="st off">확인 불가·점검</span>
+      <span class="muted">핀 숫자 = 지금 쓸 수 있는 충전기 수 / 전체</span>
+    </div>
+    <div class="list" id="list"></div>
+  </section>
+
+  <!-- 2. 내 차로 쓸 수 있나? 충전 전 체크 카드 -->
+  <section class="card" id="check">
+    <h2>✅ 충전 전 체크</h2>
+    <p class="sub">지도나 목록에서 충전소를 하나 골라 주세요.</p>
+  </section>
+
+  <!-- 3. 우리 동네 충전 인프라 현황 -->
+  <section class="card" id="infra">
+    <h2>🏘️ 우리 동네 충전 인프라</h2>
+    <p class="sub">⏳ 충전소를 불러오면 우리 구 이야기를 보여 줄게요.</p>
+  </section>
+
+  <p class="source">
+    데이터 출처: <a href="https://www.data.go.kr/data/15076352/openapi.do" target="_blank" rel="noopener">한국환경공단_전기자동차 충전소 정보</a> (공공데이터포털)
+    · 지도: Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a> · <a href="https://leafletjs.com/" target="_blank" rel="noopener">Leaflet</a><br>
+    충전기 상태는 운영사가 보낸 마지막 기록이에요. 실제 현장과 몇 분 차이가 날 수 있어요.
+  </p>
+
+  <section class="api-box">
+    <h2>🔌 이 화면이 쓰는 API</h2>
+    <div id="api-list"><code>아직 부른 API가 없어요.</code></div>
+    <p><small>🔑 화면에는 키를 가렸지만, 링크와 F12 → Network 탭에서는 키가 보여요. 이 화면은 내 컴퓨터에서만 쓰세요.<br>
+    이 API는 하루 1,000번까지만 부를 수 있어요. 구를 바꿀 때마다 1번 불러요.</small></p>
+  </section>
+</main>
+
+<script>
+  // 서울 25개 구 코드 (zscode)
+  const GU = {
+    "11110": "종로구", "11140": "중구", "11170": "용산구", "11200": "성동구", "11215": "광진구",
+    "11230": "동대문구", "11260": "중랑구", "11290": "성북구", "11305": "강북구", "11320": "도봉구",
+    "11350": "노원구", "11380": "은평구", "11410": "서대문구", "11440": "마포구", "11470": "양천구",
+    "11500": "강서구", "11530": "구로구", "11545": "금천구", "11560": "영등포구", "11590": "동작구",
+    "11620": "관악구", "11650": "서초구", "11680": "강남구", "11710": "송파구", "11740": "강동구",
+  };
+
+  // 충전기 상태 코드 → 쉬운 말
+  const STAT = {
+    "1": { text: "통신 이상", cls: "off" },
+    "2": { text: "비어 있음", cls: "free" },
+    "3": { text: "충전 중", cls: "busy" },
+    "4": { text: "운영 중지", cls: "off" },
+    "5": { text: "점검 중", cls: "off" },
+    "9": { text: "상태 모름", cls: "off" },
+  };
+
+  // 충전기 타입 코드 → 단자 이름과 쉬운 설명
+  const TYPE = {
+    "01": { name: "DC 차데모", fast: true, easy: "닛산 리프 같은 일부 수입차·옛 차량용 급속 단자" },
+    "02": { name: "AC 완속", fast: false, easy: "거의 모든 전기차가 쓸 수 있는 완속 단자" },
+    "03": { name: "DC 차데모 + AC 3상", fast: true, easy: "차데모 급속, 또는 르노 조에 같은 AC 3상 차량용" },
+    "04": { name: "DC 콤보", fast: true, easy: "현대·기아 등 국내 대부분 전기차가 쓰는 급속 단자" },
+    "05": { name: "DC 차데모 + DC 콤보", fast: true, easy: "차데모와 DC 콤보 차량 모두 가능한 급속" },
+    "06": { name: "DC 차데모 + AC 3상 + DC 콤보", fast: true, easy: "단자 3종이 달린 급속기 — 대부분 차량 가능" },
+    "07": { name: "AC 3상", fast: false, easy: "르노 조에 같은 일부 차량용" },
+    "08": { name: "DC 콤보 (완속)", fast: false, easy: "DC 콤보 단자지만 속도는 느린 편" },
+    "09": { name: "NACS", fast: true, easy: "테슬라 단자" },
+    "10": { name: "DC 콤보 + NACS", fast: true, easy: "국산 전기차와 테슬라 모두 가능" },
+    "11": { name: "대형차용 급속", fast: true, easy: "버스 등 대형차 전용일 수 있어요. 현장 안내를 확인하세요" },
+  };
+
+  // 충전소 구분 코드
+  const KIND = {
+    A0: "공공시설", B0: "주차시설", C0: "휴게시설", D0: "관광시설", E0: "상업시설",
+    F0: "차량정비시설", G0: "기타시설", H0: "아파트·공동주택", I0: "근린생활시설", J0: "교육문화시설",
+  };
+
+  const state = { gu: "11710", stations: [], selected: null, onlyFree: false, onlyFast: false, calls: {} };
+  let map = null;
+  let markerLayer = null;
+
+  // API에서 온 글자를 화면에 그대로 넣지 않도록 바꿔 줌
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function hasKey() {
+    return typeof CONFIG !== "undefined" && CONFIG.SERVICE_KEY && !CONFIG.SERVICE_KEY.includes("여기에");
+  }
+
+  function withKey(url) {
+    return url + "&serviceKey=" + encodeURIComponent(CONFIG.SERVICE_KEY);
+  }
+
+  // 🔌 상자: 이름별로 마지막에 부른 주소를 보여 줌 (키는 가림)
+  function showApi(label, url) {
+    state.calls[label] = url;
+    document.getElementById("api-list").innerHTML = Object.entries(state.calls).map(([l, u]) => `
+      <strong>${esc(l)}</strong>
+      <code>${esc(u.replace(/serviceKey=[^&]*/, "serviceKey=🔑(숨김)"))}</code>
+      <a href="${esc(u)}" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기 ↗</a>
+    `).join("");
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url); // 🔌 API 호출
+    if (!res.ok) throw new Error("응답 코드 " + res.status);
+    const data = await res.json();
+    if (data.resultCode && data.resultCode !== "00") throw new Error(data.resultMsg);
+    if (!data.items) throw new Error(data.OpenAPI_ServiceResponse?.cmmMsgHeader?.returnAuthMsg || "응답 모양이 달라요");
+    return data;
+  }
+
+  function errorBox(title, err, retry) {
+    return `
+      <div class="error">
+        <strong>⚠️ ${title}</strong><br>
+        인터넷 연결이나 config.js의 키, 맨 위 🔌 주소를 확인해 주세요.<br>
+        <small>(${esc(err.message)})</small><br>
+        <button onclick="${retry}">다시 시도</button>
+      </div>`;
+  }
+
+  // "20261021150139" → Date
+  function toDate(s) {
+    if (!s || s.length < 12) return null;
+    return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12), +(s.slice(12, 14) || 0));
+  }
+
+  function ago(d) {
+    if (!d) return "기록 없음";
+    const min = Math.round((Date.now() - d) / 60000);
+    if (min < 1) return "방금 전 기준";
+    if (min < 60) return `${min}분 전 기준`;
+    if (min < 60 * 24) return `${Math.floor(min / 60)}시간 전 기준`;
+    return `${Math.floor(min / 1440)}일 전 기준`;
+  }
+
+  // 충전기 목록을 충전소(statId)별로 묶음
+  function groupStations(items) {
+    const byId = {};
+    for (const c of items) {
+      const s = byId[c.statId] ||= {
+        id: c.statId, name: c.statNm, addr: c.addr, location: c.location,
+        lat: +c.lat, lng: +c.lng, useTime: c.useTime, busiNm: c.busiNm, busiCall: c.busiCall,
+        parkingFree: c.parkingFree, limitYn: c.limitYn, limitDetail: c.limitDetail,
+        kind: c.kind, floorNum: c.floorNum, floorType: c.floorType, note: c.note, chargers: [],
+      };
+      s.chargers.push(c);
+    }
+    for (const s of Object.values(byId)) {
+      s.free = s.chargers.filter(c => c.stat === "2").length;
+      s.fast = s.chargers.some(c => TYPE[c.chgerType]?.fast);
+      s.working = s.chargers.filter(c => c.stat === "2" || c.stat === "3").length;
+      s.updated = s.chargers.map(c => toDate(c.statUpdDt)).filter(Boolean).sort((a, b) => b - a)[0] || null;
+      s.cls = s.free > 0 ? "free" : s.working > 0 ? "busy" : "off";
+    }
+    return Object.values(byId).filter(s => s.lat && s.lng);
+  }
+
+  function filtered() {
+    // 두 조건을 모두 켜면 "비어 있는 급속 충전기"가 있는 곳만 남음
+    const ok = c => (!state.onlyFast || TYPE[c.chgerType]?.fast) && (!state.onlyFree || c.stat === "2");
+    return state.stations.filter(s => s.chargers.some(ok));
+  }
+
+  // ───── 1. 지도 카드 ─────
+  async function loadStations() {
+    const sub = document.getElementById("map-sub");
+    const listEl = document.getElementById("list");
+    if (!hasKey()) {
+      sub.innerHTML = `<div class="error"><strong>⚠️ 인증키가 없어요.</strong><br>같은 폴더의 config.js에 공공데이터포털 인증키를 넣고 저장해 주세요.</div>`;
+      return;
+    }
+    const url = withKey(API.CHARGER + state.gu);
+    showApi("충전소·충전기 상태", url);
+    sub.textContent = `⏳ ${GU[state.gu]} 충전소를 불러오는 중…`;
+    listEl.innerHTML = "";
+    state.selected = null;
+    renderCheck();
+
+    try {
+      const data = await getJson(url);
+      state.stations = groupStations(data.items.item || []);
+      state.total = data.totalCount;
+      drawStations(true);
+      renderInfra();
+    } catch (err) {
+      sub.innerHTML = errorBox("충전소를 불러오지 못했어요.", err, "loadStations()");
+      document.getElementById("infra").innerHTML = `<h2>🏘️ 우리 동네 충전 인프라</h2><p class="sub">충전소를 불러오지 못해서 이야기를 만들 수 없어요.</p>`;
+    }
+  }
+
+  function ensureMap() {
+    if (map) return true;
+    if (typeof L === "undefined") return false;
+    map = L.map("map", { scrollWheelZoom: false });
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19, attribution: "Tiles © Esri",
+    }).addTo(map);
+    // 가까운 충전소는 동그라미 하나로 묶고 "빈 곳 n" 글자를 붙임 (확대하면 풀림)
+    markerLayer = L.markerClusterGroup
+      ? L.markerClusterGroup({
+          maxClusterRadius: 50,
+          iconCreateFunction: cluster => {
+            const ss = cluster.getAllChildMarkers().map(m => m.options.station);
+            const free = ss.filter(s => s.free > 0).length;
+            return L.divIcon({
+              className: "", iconSize: [54, 54],
+              html: `<div class="group ${free ? "" : "none"}">${ss.length}곳<small>빈 곳 ${free}</small></div>`,
+            });
+          },
+        }).addTo(map)
+      : L.layerGroup().addTo(map);
+    return true;
+  }
+
+  // 좌표가 잘못 들어간 충전소(다른 구로 찍힌 것)는 빼고 지도 범위를 맞춤
+  function fitTo(list) {
+    const mid = arr => arr.slice().sort((a, b) => a - b)[Math.floor(arr.length / 2)];
+    const lat = mid(list.map(s => s.lat)), lng = mid(list.map(s => s.lng));
+    const near = list.filter(s => Math.abs(s.lat - lat) < 0.06 && Math.abs(s.lng - lng) < 0.08);
+    map.fitBounds((near.length ? near : list).map(s => [s.lat, s.lng]), { padding: [20, 20] });
+  }
+
+  function drawStations(fit) {
+    const list = filtered();
+    const freeCount = state.stations.filter(s => s.free > 0).length;
+    const newest = state.stations.map(s => s.updated).filter(Boolean).sort((a, b) => b - a)[0];
+    document.getElementById("map-sub").innerHTML =
+      `${GU[state.gu]} 충전소 ${state.stations.length.toLocaleString()}곳 중 <b>${freeCount.toLocaleString()}곳</b>에 빈 충전기가 있어요 · 상태 ${ago(newest)}` +
+      (list.length !== state.stations.length ? ` · 지금 ${list.length.toLocaleString()}곳 표시` : "");
+
+    if (ensureMap()) {
+      markerLayer.clearLayers();
+      for (const s of list) {
+        const icon = L.divIcon({
+          className: "",
+          html: `<span class="pin ${s.cls} ${state.selected === s ? "sel" : ""}">${s.cls === "off" ? "확인불가" : `빈 ${s.free}/${s.chargers.length}`}</span>`,
+        });
+        L.marker([s.lat, s.lng], { icon, title: s.name, station: s, zIndexOffset: s.free > 0 ? 1000 : 0 })
+          .on("click", () => selectStation(s))
+          .addTo(markerLayer);
+      }
+      if (fit && list.length) fitTo(list);
+    } else {
+      document.getElementById("map-area").innerHTML =
+        `<div class="error">🗺️ 지도 도구를 불러오지 못했어요. 아래 목록으로 골라 주세요.</div>`;
+    }
+
+    // 지도 아래 목록: 빈 충전기 많은 순
+    const sorted = [...list].sort((a, b) => b.free - a.free || a.name.localeCompare(b.name, "ko"));
+    document.getElementById("list").innerHTML = sorted.slice(0, 200).map(s => `
+      <button data-id="${esc(s.id)}" class="${state.selected === s ? "sel" : ""}">
+        <span class="st ${s.cls}">${s.cls === "off" ? "확인 불가" : `빈 ${s.free}/${s.chargers.length}`}</span>
+        <span class="nm">${esc(s.name)} ${s.fast ? "⚡" : ""}${s.limitYn === "Y" ? " 🔒이용 제한" : ""}<small>${esc(s.addr)}</small></span>
+      </button>`).join("") +
+      (sorted.length > 200 ? `<p class="muted">목록은 200곳까지 보여요. 지도에서 더 찾아보세요.</p>` : "") +
+      (sorted.length === 0 ? `<p class="muted">조건에 맞는 충전소가 없어요.</p>` : "");
+  }
+
+  function selectStation(s) {
+    state.selected = s;
+    drawStations(false);
+    if (map) map.setView([s.lat, s.lng], Math.max(map.getZoom(), 17));
+    renderCheck();
+    document.getElementById("check").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // ───── 2. 충전 전 체크 카드 ─────
+  function renderCheck() {
+    const box = document.getElementById("check");
+    const s = state.selected;
+    if (!s) {
+      box.innerHTML = `<h2>✅ 충전 전 체크</h2><p class="sub">지도나 목록에서 충전소를 하나 골라 주세요.</p>`;
+      return;
+    }
+    const types = [...new Set(s.chargers.map(c => c.chgerType))];
+    const outputs = s.chargers.map(c => +c.output).filter(Boolean);
+    const maxKw = outputs.length ? Math.max(...outputs) : 0;
+    const minKw = outputs.length ? Math.min(...outputs) : 0;
+    const speedText = maxKw >= 50 ? "급속" : maxKw > 0 ? "완속" : "정보 없음";
+    const speedEasy = maxKw >= 50
+      ? "급속은 보통 30분~1시간 안팎이면 넉넉히 채워요. 잠깐 들를 때 좋아요."
+      : maxKw > 0
+        ? "완속은 몇 시간에서 하룻밤 걸려요. 집·회사처럼 오래 세워 둘 곳에 좋아요."
+        : "운영사에 물어봐 주세요.";
+    const outlet = outputs.includes(3) ? "<p class=\"easy\">🔌 3kW는 콘센트형이라 개인 휴대용 충전 케이블이 필요할 수 있어요.</p>" : "";
+    const floor = s.floorNum ? `${s.floorType === "B" ? "지하" : "지상"} ${esc(s.floorNum)}층` : "";
+
+    box.innerHTML = `
+      <h2>✅ ${esc(s.name)}</h2>
+      <p class="sub">${esc(s.addr)} ${esc(s.location || "")} ${floor ? "· " + floor : ""} · ${esc(KIND[s.kind] || "")}</p>
+      <p><span class="st ${s.cls}">${s.cls === "free" ? `지금 ${s.free}대 비어 있음` : s.cls === "busy" ? "모두 사용 중" : "상태 확인 불가"}</span>
+        <span class="muted">${ago(s.updated)}</span></p>
+
+      <div class="check">
+        <div>
+          <h3>🔌 충전기 타입 (내 차 단자와 맞나요?)</h3>
+          ${types.map(t => `<p class="big">${esc(TYPE[t]?.name || "타입 " + t)}</p><p class="easy">${esc(TYPE[t]?.easy || "운영사에 확인해 주세요")}</p>`).join("")}
+        </div>
+        <div>
+          <h3>⏱️ 충전 속도</h3>
+          <p class="big">${speedText} ${maxKw ? `(${minKw === maxKw ? maxKw : minKw + "~" + maxKw}kW)` : ""}</p>
+          <p class="easy">${speedEasy} kW 숫자가 클수록 빨라요.</p>${outlet}
+        </div>
+        <div>
+          <h3>🅿️ 주차료</h3>
+          <p class="big">${s.parkingFree === "Y" ? "무료" : "유료이거나 확인 필요"}</p>
+          <p class="easy">${s.parkingFree === "Y" ? "충전하는 동안 주차료가 없어요." : "충전 요금과 별도로 주차료가 나올 수 있어요."}</p>
+        </div>
+        <div>
+          <h3>🕒 이용 시간</h3>
+          <p class="big">${esc(s.useTime || "정보 없음")}</p>
+        </div>
+        <div>
+          <h3>🚧 이용자 제한</h3>
+          <p class="big">${s.limitYn === "Y" ? "제한 있음" : "누구나 이용"}</p>
+          <p class="easy">${s.limitYn === "Y" ? esc(s.limitDetail || "아파트 주민 등 일부만 쓸 수 있어요") : "외부인도 쓸 수 있는 충전소예요."}</p>
+        </div>
+        <div>
+          <h3>📞 운영사</h3>
+          <p class="big">${esc(s.busiNm || "정보 없음")}</p>
+          <p class="easy">${esc(s.busiCall || "")}</p>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>충전기</th><th>상태</th><th>타입·속도</th><th>마지막 기록</th></tr></thead>
+        <tbody>
+          ${s.chargers.sort((a, b) => a.chgerId.localeCompare(b.chgerId)).map(c => {
+            const st = STAT[c.stat] || STAT["9"];
+            return `<tr>
+              <td>${esc(c.chgerId)}번</td>
+              <td><span class="st ${st.cls}">${st.text}</span></td>
+              <td>${esc(TYPE[c.chgerType]?.name || c.chgerType)} · ${esc(c.output || "?")}kW</td>
+              <td class="muted">${ago(toDate(c.statUpdDt))}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+      ${s.note ? `<p class="muted">📝 ${esc(s.note)}</p>` : ""}
+    `;
+  }
+
+  // ───── 3. 우리 동네 충전 인프라 ─────
+  function renderInfra() {
+    const box = document.getElementById("infra");
+    const chargers = state.stations.flatMap(s => s.chargers);
+    const fast = chargers.filter(c => TYPE[c.chgerType]?.fast).length;
+    const fastPct = chargers.length ? Math.round(fast / chargers.length * 100) : 0;
+    const apt = chargers.filter(c => c.kind === "H0").length;
+    const aptPct = chargers.length ? Math.round(apt / chargers.length * 100) : 0;
+    const open = state.stations.filter(s => s.limitYn !== "Y").length;
+
+    box.innerHTML = `
+      <h2>🏘️ ${GU[state.gu]}는 충전소가 충분할까?</h2>
+      <p class="story">${GU[state.gu]}에는 충전기가 <b>${chargers.length.toLocaleString()}대</b>(충전소 ${state.stations.length.toLocaleString()}곳) 있어요.
+        이 중 <b>급속은 ${fastPct}%</b>(${fast.toLocaleString()}대)이고, <b>${aptPct}%</b>는 아파트 안에 있어요.
+        누구나 쓸 수 있는 충전소는 ${open.toLocaleString()}곳이에요.</p>
+      <div class="muted">급속 ${fastPct}% · 완속 ${100 - fastPct}%</div>
+      <div class="ratio" role="img" aria-label="급속 비율 ${fastPct}%"><span style="width:${fastPct}%"></span></div>
+    `;
+  }
+
+  // ───── 화면 연결 ─────
+  const guSelect = document.getElementById("gu");
+  guSelect.innerHTML = Object.entries(GU)
+    .sort((a, b) => a[1].localeCompare(b[1], "ko"))
+    .map(([code, name]) => `<option value="${code}" ${code === state.gu ? "selected" : ""}>서울 ${name}</option>`).join("");
+  guSelect.addEventListener("change", () => { state.gu = guSelect.value; loadStations(); });
+
+  for (const [id, key] of [["only-free", "onlyFree"], ["only-fast", "onlyFast"]]) {
+    document.getElementById(id).addEventListener("click", e => {
+      state[key] = !state[key];
+      e.currentTarget.classList.toggle("on", state[key]);
+      if (state.stations.length) drawStations(true);
+    });
+  }
+
+  document.getElementById("list").addEventListener("click", e => {
+    const b = e.target.closest("button[data-id]");
+    if (b) selectStation(state.stations.find(s => s.id === b.dataset.id));
+  });
+
+  loadStations();
+</script>
+</body>
+</html>

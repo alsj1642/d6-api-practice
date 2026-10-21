@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전기붕붕이랑 드라이브</title>
+<!-- 🔑 인증키는 config.js에 따로 둠 (git에 안 올라감) -->
+<script src="config.js"></script>
+<script>
+  // 🔌 이 화면이 쓰는 API 주소는 전부 여기 한 곳에 모아 둠 (모두 공공데이터포털, 인증키 필요)
+  const API = {
+    // 🔌 한국관광공사_국문 관광정보(TourAPI) — contentTypeId=12 관광지, lDongRegnCd=41 경기 / 28 인천
+    TOUR_GG: "https://apis.data.go.kr/B551011/KorService2/areaBasedList2?_type=json&MobileOS=ETC&MobileApp=drive&numOfRows=2000&pageNo=1&contentTypeId=12&arrange=Q&lDongRegnCd=41",
+    TOUR_IC: "https://apis.data.go.kr/B551011/KorService2/areaBasedList2?_type=json&MobileOS=ETC&MobileApp=drive&numOfRows=2000&pageNo=1&contentTypeId=12&arrange=Q&lDongRegnCd=28",
+    // 🔌 기상청_단기예보 — base_date·base_time(발표 시각), nx·ny(기상청 격자)는 코드에서 붙임
+    WEATHER: "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst?dataType=JSON&numOfRows=1000&pageNo=1",
+    // 🔌 한국환경공단_에어코리아 — 미세먼지 예보(오늘·내일·모레), searchDate는 코드에서 붙임
+    AIR: "https://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMinuDustFrcstDspth?returnType=json&numOfRows=100&pageNo=1",
+    // 🔌 한국환경공단_전기자동차 충전소 정보 — zcode=시도, zscode=시군구는 코드에서 붙임
+    CHARGER: "https://apis.data.go.kr/B552584/EvCharger/getChargerInfo?dataType=JSON&pageNo=1&numOfRows=9999",
+  };
+</script>
+<!-- 글꼴: Pretendard -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<!-- 충전소 지도 (Leaflet) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --paper: #fbfcff;
+    --rule: #dfe8f6;
+    --margin: #f4b4b4;
+    --ink: #2b2d42;
+    --ink-soft: #5c6379;
+    --yellow: #ffe45c;
+    --mint: #a7f0d4;
+    --pink: #ffc2d4;
+    --sky: #b9dcff;
+    --red: #e5383b;
+    --green: #2f9e44;
+    --orange: #f08c00;
+    /* 손으로 그린 듯 살짝 찌그러진 모서리 */
+    --hand: 26px 8px 22px 10px / 10px 22px 8px 26px;
+    --hand-sm: 18px 6px 16px 5px / 5px 16px 6px 18px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    font-family: "Pretendard Variable", Pretendard, -apple-system, "Malgun Gothic", sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    /* 공책 줄 */
+    background-color: var(--paper);
+    background-image: repeating-linear-gradient(to bottom, transparent 0 31px, var(--rule) 31px 32px);
+    background-attachment: local;
+  }
+  /* 공책 왼쪽 빨간 여백선 */
+  body::before {
+    content: ""; position: fixed; top: 0; bottom: 0; left: 56px; width: 2px;
+    background: var(--margin); opacity: .7; pointer-events: none;
+  }
+  @media (max-width: 760px) { body::before { left: 14px; } }
+  button, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px dashed var(--ink); outline-offset: 3px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 32px 0 88px; }
+  @media (max-width: 760px) { .wrap { padding: 0 16px 0 30px; } }
+
+  /* 손그림 아이콘 공통 */
+  .dd { width: 1em; height: 1em; overflow: visible; filter: url(#wobble); flex: none; }
+
+  /* ───── 맨 위: 제목 + 손그림 장면 ───── */
+  .hero { display: grid; grid-template-columns: 1fr 500px; gap: 24px; align-items: end; padding: 48px 0 28px; }
+  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; padding-top: 32px; } }
+  .hero h1 {
+    margin: 0 0 18px; font-size: clamp(2.2rem, 5.6vw, 3.9rem); font-weight: 800;
+    line-height: 1.28; letter-spacing: -0.005em; word-spacing: 0.08em; word-break: keep-all;
+    isolation: isolate;
+  }
+  /* "드라이브"에 형광펜: 살짝 기울고 끝이 고르지 않은 붓 자국 */
+  .hl { position: relative; white-space: nowrap; }
+  .hl::before {
+    content: ""; position: absolute; z-index: -1; left: -0.12em; right: -0.16em; bottom: 0.06em; height: 0.48em;
+    background: var(--yellow); opacity: .9; border-radius: 0.5em 0.15em 0.4em 0.1em / 0.3em 0.5em 0.2em 0.45em;
+    transform: rotate(-1.6deg) skewX(-6deg);
+  }
+  .hero p { margin: 0; color: var(--ink-soft); font-size: 1.08rem; max-width: 34em; word-break: keep-all; }
+  .scene { width: 100%; height: auto; display: block; }
+  .scene .drive { animation: drive-in 1.4s cubic-bezier(.3, .7, .3, 1) both; }
+  @keyframes drive-in { from { transform: translateX(-170px); } to { transform: none; } }
+  @media (max-width: 900px) { .scene { max-width: 440px; } }
+
+  /* ───── 필터: 테이프로 붙인 종이 ───── */
+  .sheet {
+    position: relative; background: #fff; border: 2px solid var(--ink); border-radius: var(--hand);
+    box-shadow: 4px 5px 0 var(--sky);
+  }
+  .tape {
+    position: absolute; top: -13px; width: 96px; height: 26px; background: rgba(255, 228, 92, .55);
+    border-left: 2px dotted rgba(43, 45, 66, .15); border-right: 2px dotted rgba(43, 45, 66, .15);
+  }
+  .tape.l { left: 28px; transform: rotate(-4deg); }
+  .tape.r { right: 32px; transform: rotate(3deg); background: rgba(167, 240, 212, .65); }
+
+  .filters { display: grid; grid-template-columns: 0.9fr 1.3fr 2.4fr auto; gap: 22px; align-items: end; padding: 26px 26px 22px; }
+  @media (max-width: 1000px) { .filters { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 640px) { .filters { grid-template-columns: 1fr; padding: 22px 16px 16px; } }
+  .q { display: flex; gap: 6px; align-items: center; font-weight: 700; font-size: 0.95rem; margin-bottom: 8px; }
+  .q .dd { font-size: 1.25rem; }
+  .filters select {
+    width: 100%; height: 54px; padding: 0 14px; border: 2px solid var(--ink); border-radius: var(--hand-sm);
+    background: #fff; font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  .seg { display: grid; gap: 8px; }
+  #day { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #theme { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  @media (max-width: 640px) { #theme { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .seg button {
+    min-height: 54px; padding: 6px 4px; border: 2px solid var(--ink); border-radius: var(--hand-sm);
+    background: #fff; cursor: pointer; font-weight: 600; line-height: 1.25; white-space: nowrap;
+  }
+  .seg button small { display: block; font-size: 0.72rem; font-weight: 500; color: var(--ink-soft); }
+  .seg button:hover { background: #fffbe0; }
+  .seg button.on { background: var(--yellow); font-weight: 800; box-shadow: 2px 2px 0 var(--ink); }
+  .go {
+    height: 54px; padding: 0 22px; display: inline-flex; gap: 8px; align-items: center; justify-content: center;
+    border: 2px solid var(--ink); border-radius: var(--hand-sm); background: var(--ink); color: #fff;
+    font-weight: 800; font-size: 1.05rem; cursor: pointer; box-shadow: 3px 3px 0 var(--yellow); white-space: nowrap;
+  }
+  .go .dd { font-size: 1.8rem; color: #fff; }
+  .go:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--yellow); }
+
+  /* ───── 결과 머리말 ───── */
+  .summary { margin: 44px 0 22px; }
+  .summary h2 { display: flex; gap: 10px; align-items: center; margin: 0; font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
+  .summary h2 .dd { font-size: 1.7rem; }
+  .summary p { margin: 2px 0 0; color: var(--ink-soft); }
+  .warn { color: var(--red); font-weight: 600; }
+  .warn button, .error button {
+    margin-left: 6px; padding: 2px 12px; border: 2px solid currentColor; border-radius: var(--hand-sm);
+    background: #fff; cursor: pointer; font-weight: 700;
+  }
+
+  /* 불러오는 중: 붕붕이가 길을 달림 */
+  .loading { padding: 56px 0 64px; text-align: center; color: var(--ink-soft); font-weight: 600; }
+  .loading svg { width: 220px; height: 70px; display: block; margin: 0 auto 8px; }
+  .loading .runner { animation: run 1.6s linear infinite; }
+  @keyframes run { from { transform: translateX(-30px); } to { transform: translateX(150px); } }
+
+  /* ───── 추천 카드 ───── */
+  .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px 26px; }
+  @media (max-width: 1000px) { .cards { grid-template-columns: minmax(0, 1fr); max-width: 520px; } }
+  .card { position: relative; background: #fff; border: 2px solid var(--ink); border-radius: var(--hand); padding: 18px 18px 14px; display: flex; flex-direction: column; }
+  .card:nth-child(1) { box-shadow: 4px 5px 0 var(--yellow); }
+  .card:nth-child(2) { box-shadow: 4px 5px 0 var(--mint); }
+  .card:nth-child(3) { box-shadow: 4px 5px 0 var(--pink); }
+  .card .tape { top: -12px; left: 50%; margin-left: -48px; transform: rotate(-2deg); }
+
+  .polaroid { background: #fff; padding: 8px 8px 0; border: 1px solid #d5dae6; box-shadow: 0 2px 6px rgba(43, 45, 66, .12); transform: rotate(-1.2deg); }
+  .card:nth-child(2) .polaroid { transform: rotate(1deg); }
+  .polaroid img, .polaroid .noimg { display: block; width: 100%; height: 170px; object-fit: cover; background: var(--rule); }
+  .polaroid figcaption { padding: 6px 2px 8px; font-size: 0.8rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .card-title { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0 4px; }
+  .card-title > div { flex: 1; min-width: 0; }
+  .rank { font-size: 0.9rem; font-weight: 800; color: var(--ink-soft); }
+  .card h3 { margin: 0; font-size: 1.7rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; }
+  .card h3 span { background: linear-gradient(transparent 58%, var(--yellow) 58% 92%, transparent 92%); padding: 0 2px; }
+  .card:nth-child(2) h3 span { background-image: linear-gradient(transparent 58%, var(--mint) 58% 92%, transparent 92%); }
+  .card:nth-child(3) h3 span { background-image: linear-gradient(transparent 58%, var(--pink) 58% 92%, transparent 92%); }
+  .card .where { font-size: 0.88rem; color: var(--ink-soft); white-space: nowrap; }
+
+  /* 빨간 펜 동그라미 점수 */
+  .grade-circle { position: relative; flex: none; width: 74px; height: 60px; display: grid; place-items: center; color: var(--red); margin-top: -6px; }
+  .grade-circle svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; filter: url(#wobble); }
+  .grade-circle b { font-size: 1.75rem; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
+  .grade-circle small { font-size: 0.7rem; font-weight: 700; margin-left: 1px; }
+
+  .facts { list-style: none; margin: 10px 0 0; padding: 0; }
+  .fact { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 2px; border-top: 2px dashed var(--rule); }
+  .fact .dd { font-size: 1.6rem; }
+  .fact .v { font-weight: 700; }
+  .fact .d { font-size: 0.82rem; color: var(--ink-soft); }
+  .fact .pt { font-size: 0.82rem; font-weight: 800; color: var(--ink-soft); }
+  .fact .fail { color: var(--red); font-weight: 600; font-size: 0.9rem; }
+
+  .badge { display: inline-block; padding: 0 9px; border: 2px solid var(--ink); border-radius: var(--hand-sm); font-size: 0.82rem; font-weight: 800; line-height: 1.5; background: #fff; }
+  .badge.g1, .badge.free { background: #c9f2d3; }
+  .badge.g2 { background: #fff1a8; }
+  .badge.g3, .badge.g4 { background: #ffc9c9; }
+  .badge.g0 { background: #eceff5; }
+  .badge.busy { background: #ffe0b3; }
+
+  /* 충전: 마우스 올리면 쪽지, 누르면 지도 */
+  .charge { position: relative; border-top: 2px dashed var(--rule); padding-top: 10px; }
+  .charge-btn {
+    width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    padding: 10px 12px; text-align: left; cursor: pointer;
+    background: #fffbe0; border: 2px solid var(--ink); border-radius: var(--hand-sm);
+  }
+  .charge-btn:hover { background: #fff3a8; }
+  .charge-btn .dd { font-size: 1.6rem; }
+  .charge-btn .v { font-weight: 800; }
+  .charge-btn .d { font-size: 0.82rem; color: var(--ink-soft); }
+  .charge-btn .more { display: block; margin-top: 2px; font-size: 0.82rem; font-weight: 700; text-decoration: underline wavy var(--orange); text-underline-offset: 4px; }
+  .charge-btn .pt { font-size: 0.82rem; font-weight: 800; color: var(--ink-soft); }
+  .note {
+    display: none; position: absolute; left: -6px; right: -6px; top: calc(100% + 10px); z-index: 30;
+    background: #fff; border: 2px solid var(--ink); border-radius: var(--hand-sm); padding: 14px 14px 10px;
+    box-shadow: 4px 5px 0 var(--sky);
+  }
+  .note .tape { top: -12px; left: 18px; width: 70px; height: 22px; transform: rotate(-5deg); }
+  .charge:hover .note, .charge:focus-within .note { display: block; }
+  .note h4 { margin: 0 0 4px; font-size: 0.88rem; font-weight: 800; }
+  .note ul { list-style: none; margin: 0; padding: 0; }
+  .note li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--rule); font-size: 0.88rem; }
+  .note li:first-child { border-top: 0; }
+  .note li small { display: block; color: var(--ink-soft); }
+  .note p { margin: 6px 0 0; font-size: 0.8rem; color: var(--ink-soft); }
+
+  .spots { margin-top: auto; padding-top: 12px; }
+  .spots h4 { display: flex; gap: 6px; align-items: center; margin: 4px 0 4px; font-size: 0.92rem; font-weight: 800; }
+  .spots h4 .dd { font-size: 1.2rem; }
+  .spot { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 0; }
+  .spot img, .spot .noimg { width: 52px; height: 40px; object-fit: cover; border: 2px solid var(--ink); border-radius: var(--hand-sm); background: var(--rule); }
+  .spot .nm { font-weight: 600; font-size: 0.93rem; line-height: 1.35; word-break: keep-all; }
+  .spot a { font-size: 0.82rem; font-weight: 700; color: var(--ink); text-decoration: underline; text-decoration-color: var(--mint); text-decoration-thickness: 3px; text-underline-offset: 3px; white-space: nowrap; }
+
+  /* ───── 아래: 다른 후보 + 포스트잇 ───── */
+  .lower { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 30px; margin-top: 44px; align-items: start; }
+  @media (max-width: 1000px) { .lower { grid-template-columns: minmax(0, 1fr); } }
+  .lower h2 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; font-size: 1.25rem; font-weight: 800; }
+  .lower h2 .dd { font-size: 1.5rem; }
+  .others { padding: 22px 22px 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { padding: 8px 6px; text-align: left; border-bottom: 2px dashed var(--rule); }
+  th { font-size: 0.8rem; font-weight: 700; color: var(--ink-soft); }
+  td.num, th.num { text-align: right; }
+  td.num b { color: var(--red); font-size: 1.05rem; }
+  .others .hint { margin: 8px 0 0; font-size: 0.85rem; color: var(--ink-soft); }
+  @media (max-width: 640px) { .others { overflow-x: auto; } table { min-width: 520px; } }
+
+  .postit {
+    position: relative; background: #fff4a3; padding: 26px 22px 20px; transform: rotate(1.2deg);
+    box-shadow: 0 10px 18px -10px rgba(43, 45, 66, .35);
+  }
+  .postit::before { content: ""; position: absolute; top: -10px; left: 50%; width: 80px; height: 22px; margin-left: -40px; background: rgba(185, 220, 255, .7); transform: rotate(-3deg); }
+  .postit ul { list-style: none; margin: 0; padding: 0; font-size: 0.92rem; }
+  .postit li { padding: 7px 0; border-top: 1px dashed rgba(43, 45, 66, .25); }
+  .postit li:first-child { border-top: 0; }
+  .postit b { display: block; }
+
+  /* ───── 충전소 지도 창 ───── */
+  dialog {
+    width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0;
+    background: #fff; color: var(--ink); border: 2px solid var(--ink); border-radius: var(--hand-sm);
+    box-shadow: 6px 7px 0 var(--yellow);
+  }
+  dialog::backdrop { background: rgba(43, 45, 66, .4); }
+  .dlg-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 2px solid var(--ink); }
+  .dlg-head .dd { font-size: 1.7rem; }
+  .dlg-head h2 { margin: 0; flex: 1; font-size: 1.15rem; font-weight: 800; }
+  .dlg-head button { padding: 4px 14px; border: 2px solid var(--ink); border-radius: var(--hand-sm); background: #fff; cursor: pointer; font-weight: 700; }
+  .dlg-body { display: grid; grid-template-columns: 1.3fr 1fr; height: min(560px, calc(100vh - 140px)); }
+  @media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; grid-template-rows: 260px 1fr; height: calc(100vh - 140px); } }
+  #cmap { height: 100%; min-height: 240px; border-right: 2px solid var(--ink); }
+  .dlg-list { overflow-y: auto; padding: 4px 16px 16px; background-image: repeating-linear-gradient(to bottom, transparent 0 31px, var(--rule) 31px 32px); }
+  .dlg-list .legend { margin: 10px 0 4px; font-size: 0.82rem; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .dlg-list .row { padding: 12px 8px; border-bottom: 2px dashed var(--rule); cursor: pointer; background: #fff; }
+  .dlg-list .row:hover { background: #fffbe0; }
+  .dlg-list .row.sel { background: #fff3a8; }
+  .dlg-list .row b { font-size: 1rem; }
+  .dlg-list .row small { display: block; color: var(--ink-soft); font-size: 0.82rem; }
+  .dlg-list .row a { font-size: 0.85rem; font-weight: 700; color: var(--ink); text-decoration: underline; text-decoration-color: var(--mint); text-decoration-thickness: 3px; text-underline-offset: 3px; }
+  .pin {
+    display: inline-block; transform: translate(-50%, -50%); padding: 1px 8px; border: 2px solid var(--ink); border-radius: var(--hand-sm);
+    font: 800 12px/1.35 "Pretendard Variable", Pretendard, sans-serif; color: var(--ink); white-space: nowrap; background: #fff;
+  }
+  .pin.free { background: #c9f2d3; }
+  .pin.busy { background: #ffe0b3; }
+  .pin.spot { background: var(--ink); color: #fff; }
+
+  .error { margin: 40px 0; padding: 18px 20px; border: 2px solid var(--red); border-radius: var(--hand-sm); color: var(--red); background: #fff; font-weight: 600; }
+
+  /* ───── 맨 아래 ───── */
+  footer { margin-top: 64px; padding-bottom: 48px; }
+  .garden { display: block; width: 100%; max-width: 520px; height: 64px; margin: 0 0 6px; }
+  .source { margin: 0; font-size: 0.85rem; color: var(--ink-soft); max-width: 60em; }
+  .source a { color: var(--ink); }
+  .api-box { margin-top: 18px; background: #fff; border: 2px dashed var(--ink-soft); border-radius: var(--hand-sm); font-size: 0.85rem; }
+  .api-box summary { padding: 12px 18px; cursor: pointer; font-weight: 700; font-size: 0.95rem; list-style-position: inside; }
+  .api-box summary small { font-weight: 500; color: var(--ink-soft); }
+  .api-box[open] summary { border-bottom: 2px dashed var(--rule); }
+  .api-box .api-body { padding: 4px 18px 14px; }
+  .api-box strong { display: block; margin-top: 8px; }
+  .api-box code { display: block; word-break: break-all; color: var(--ink-soft); font-family: inherit; }
+  .api-box a { color: var(--ink); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scene .drive, .loading .runner { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 손그림 모음 (여기서 그려 두고 화면 곳곳에서 <use>로 꺼내 씀) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- 선을 살짝 흔들어서 손으로 그린 느낌을 냄 -->
+    <filter id="wobble" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="4" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="2.6"/>
+    </filter>
+    <symbol id="d-car" viewBox="0 0 124 72">
+      <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10 50 C7 40 13 35 24 34 L34 21 C38 15 44 13 52 13 L76 13 C84 13 89 16 93 22 L101 34 C112 35 117 41 114 50 Z" fill="#a7f0d4"/>
+        <path d="M39 32 L46 21 C48 18 51 17 54 17 L61 17 L61 32 Z" fill="#fff"/>
+        <path d="M66 17 L75 17 C79 17 82 19 84 22 L90 32 L66 32 Z" fill="#fff"/>
+        <path d="M66 38 L60 45 L65 45 L61 52" stroke-width="2.6"/>
+        <circle cx="33" cy="52" r="10" fill="#fff"/><circle cx="33" cy="52" r="3"/>
+        <circle cx="92" cy="52" r="10" fill="#fff"/><circle cx="92" cy="52" r="3"/>
+        <path d="M103 44 Q107 48 111 44" stroke-width="2.4"/>
+      </g>
+      <circle cx="108" cy="39" r="2.6" fill="currentColor"/>
+      <circle cx="100" cy="40" r="2.6" fill="#ffc2d4"/>
+    </symbol>
+    <symbol id="d-flower" viewBox="0 0 40 62">
+      <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 26 C19 36 21 46 20 60"/>
+        <path d="M20 46 C26 39 33 40 31 45 C28 49 23 49 20 46 Z" fill="#a7f0d4"/>
+        <g fill="#ffc2d4">
+          <circle cx="20" cy="9" r="6.5"/><circle cx="29" cy="15" r="6.5"/><circle cx="26" cy="25" r="6.5"/>
+          <circle cx="14" cy="25" r="6.5"/><circle cx="11" cy="15" r="6.5"/>
+        </g>
+        <circle cx="20" cy="17.5" r="4.5" fill="#ffe45c"/>
+      </g>
+    </symbol>
+    <symbol id="d-sun" viewBox="0 0 50 50">
+      <g fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round">
+        <circle cx="25" cy="25" r="10" fill="#ffe45c"/>
+        <path d="M25 4 V9 M25 41 V46 M4 25 H9 M41 25 H46 M10 10 L13.5 13.5 M36.5 36.5 L40 40 M10 40 L13.5 36.5 M36.5 13.5 L40 10"/>
+      </g>
+    </symbol>
+    <symbol id="d-cloud" viewBox="0 0 70 42">
+      <path d="M15 34 C5 34 4 21 14 20 C14 10 28 7 33 16 C37 5 55 8 55 19 C65 19 67 34 57 34 Z" fill="#fff" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="d-rain" viewBox="0 0 70 56">
+      <path d="M15 30 C5 30 4 17 14 16 C14 6 28 3 33 12 C37 1 55 4 55 15 C65 15 67 30 57 30 Z" fill="#b9dcff" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/>
+      <path d="M22 38 L19 46 M36 38 L33 48 M50 38 L47 46" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="d-wind" viewBox="0 0 44 32">
+      <path d="M4 10 H25 C32 10 32 1 25 2 M4 18 H34 C41 18 41 28 34 27 M4 26 H17" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="d-bolt" viewBox="0 0 30 42">
+      <path d="M19 2 L6 23 L15 23 L11 40 L25 16 L16 16 Z" fill="#ffe45c" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="d-tree" viewBox="0 0 44 62">
+      <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 60 V36 M22 46 L15 40" fill="none"/>
+        <path d="M22 38 C8 40 3 28 10 21 C6 11 17 3 24 8 C32 3 42 11 37 20 C44 28 36 40 22 38 Z" fill="#a7f0d4"/>
+      </g>
+    </symbol>
+    <symbol id="d-star" viewBox="0 0 24 24">
+      <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" fill="#ffe45c" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="d-heart" viewBox="0 0 24 24">
+      <path d="M12 21 C4 14 2 9 6 5 C9 2 12 5 12 7 C12 5 15 2 18 5 C22 9 20 14 12 21 Z" fill="#ffc2d4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="d-pin" viewBox="0 0 30 40">
+      <path d="M15 38 C6 26 3 20 3 14 C3 7 8 2 15 2 C22 2 27 7 27 14 C27 20 24 26 15 38 Z" fill="#ffc2d4" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+      <circle cx="15" cy="14" r="4.5" fill="#fff" stroke="currentColor" stroke-width="2.2"/>
+    </symbol>
+    <symbol id="d-calendar" viewBox="0 0 36 36">
+      <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="7" width="28" height="25" rx="3" fill="#fff"/>
+        <path d="M4 14 H32" /><path d="M11 3 V10 M25 3 V10"/>
+        <path d="M11 21 H13 M18 21 H20 M25 21 H27 M11 27 H13 M18 27 H20" stroke-width="3"/>
+      </g>
+    </symbol>
+    <symbol id="d-bag" viewBox="0 0 36 36">
+      <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 13 C7 9 9 8 12 8 H24 C27 8 29 9 29 13 V30 C29 32 28 33 26 33 H10 C8 33 7 32 7 30 Z" fill="#b9dcff"/>
+        <path d="M13 8 C13 3 23 3 23 8"/><path d="M12 19 H24"/>
+      </g>
+    </symbol>
+    <symbol id="d-pencil" viewBox="0 0 36 36">
+      <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 30 L8 22 L25 5 L31 11 L14 28 Z" fill="#ffe45c"/><path d="M22 8 L28 14 M8 22 L14 28"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="wrap hero">
+  <div>
+    <h1>전기붕붕이랑<br><span class="hl">드라이브</span> 갑시다~</h1>
+    <p>서울 근교 경기·인천에서 날씨 맑고, 공기 좋고, 충전하기 편한 곳을 골라 드려요.</p>
+  </div>
+  <!-- 손그림 장면: 크레파스로 칠하고(색) 연필로 두 번 덧그린(선) 낙서 -->
+  <svg class="scene" viewBox="0 0 480 260" aria-hidden="true">
+    <defs>
+      <!-- 연필 선: 살짝 흔들리고 종이 결이 비침 -->
+      <filter id="pencil" x="-5%" y="-5%" width="110%" height="110%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="3" seed="7" result="w"/>
+        <feDisplacementMap in="SourceGraphic" in2="w" scale="3.2" result="d"/>
+        <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="2" result="g"/>
+        <feColorMatrix in="g" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -1.6 1.55" result="ga"/>
+        <feComposite in="d" in2="ga" operator="in"/>
+      </filter>
+      <!-- 크레파스 색: 더 거칠고 듬성듬성 -->
+      <filter id="crayon" x="-5%" y="-5%" width="110%" height="110%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="2" seed="11" result="w"/>
+        <feDisplacementMap in="SourceGraphic" in2="w" scale="5" result="d"/>
+        <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="2" seed="5" result="g"/>
+        <feColorMatrix in="g" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.4 1.9" result="ga"/>
+        <feComposite in="d" in2="ga" operator="in"/>
+      </filter>
+      <!-- 꽃 한 송이 (꽃잎은 고리 다섯 개를 한 번에 그린 선) -->
+      <g id="sk-flower">
+        <path d="M-9 -7 L8 -11 L-12 2 L12 -3 L-8 11 L10 7 L-3 13" stroke="#ff9fbd" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#crayon)"/>
+        <path d="M-2 -1 L2 -2 L-1 2" stroke="#ffd43b" stroke-width="5" fill="none" stroke-linecap="round" filter="url(#crayon)"/>
+        <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M0 -3 C-9 -18 9 -19 1 -3 C11 -13 19 -1 4 0 C16 7 6 18 1 4 C-2 18 -16 10 -3 2 C-18 2 -14 -14 0 -3" stroke-width="2.2"/>
+          <path d="M1 -2 C-7 -16 8 -17 2 -3" stroke-width="1" opacity=".55"/>
+          <path d="M0 5 C-2 18 2 30 -1 44" stroke-width="2.2"/>
+          <path d="M-1 30 C6 21 15 23 14 27 C11 33 4 33 -1 30" stroke-width="2"/>
+        </g>
+        <path d="M2 27 L10 24 L4 30" stroke="#7fdcb8" stroke-width="5" fill="none" stroke-linecap="round" filter="url(#crayon)"/>
+      </g>
+      <!-- 반짝이 -->
+      <g id="sk-spark" fill="none" stroke="#2b2d42" stroke-linecap="round" filter="url(#pencil)">
+        <path d="M0 -9 C1 -3 3 -1 9 0 C3 1 1 3 0 9 C-1 3 -3 1 -9 0 C-3 -1 -1 -3 0 -9" stroke-width="1.8"/>
+      </g>
+      <!-- 풀 한 줌 -->
+      <path id="sk-grass" d="M0 0 L3 -11 L6 -1 L10 -14 L13 -1 L17 -9 L19 0" fill="none" stroke="#2b2d42" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </defs>
+
+    <!-- 해: 크레파스로 빙글빙글 칠하고, 햇살은 길이가 제각각 -->
+    <g transform="translate(410 56)">
+      <path d="M-15 2 C-16 -18 16 -20 15 0 C14 15 -12 16 -12 1 C-11 -11 10 -12 10 0 C9 8 -5 9 -5 1 C-5 -4 4 -4 3 1" stroke="#ffd43b" stroke-width="9" fill="none" stroke-linecap="round" filter="url(#crayon)"/>
+      <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round">
+        <path d="M-16 -3 C-15 -16 -4 -21 5 -19 C15 -17 20 -7 18 4 C16 15 4 20 -6 17 C-15 14 -19 4 -15 -6" stroke-width="2.3"/>
+        <path d="M-14 -7 C-10 -17 4 -20 12 -14" stroke-width="1.1" opacity=".5"/>
+        <path d="M1 -29 L2 -40 M23 -21 L31 -29 M29 2 L42 3 M21 23 L29 32 M-1 30 L-2 40 M-22 22 L-29 30 M-28 -1 L-40 -2 M-21 -21 L-27 -28" stroke-width="2.3"/>
+        <path d="M-5 -4 L-5 -2 M5 -4 L5 -2" stroke-width="2.6"/>
+        <path d="M-6 4 C-3 8 3 8 6 4" stroke-width="2"/>
+      </g>
+    </g>
+
+    <!-- 구름 두 개 -->
+    <g transform="translate(66 46)">
+      <path d="M-24 14 L18 12 L-20 4 L28 6 L-10 -4 L20 -6" stroke="#b9dcff" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#crayon)"/>
+      <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-30 20 C-44 20 -44 2 -30 2 C-31 -14 -10 -20 -3 -8 C1 -24 26 -22 27 -6 C41 -8 46 12 32 18 C30 23 22 23 18 21 C10 25 -18 25 -30 20" stroke-width="2.3"/>
+        <path d="M-29 5 C-29 -9 -12 -15 -5 -6" stroke-width="1" opacity=".5"/>
+        <path d="M5 4 C9 0 14 4 11 7" stroke-width="1.4" opacity=".6"/>
+      </g>
+    </g>
+    <g transform="translate(286 70) scale(.62)">
+      <path d="M-24 14 L18 12 L-20 4 L28 6 L-10 -4 L20 -6" stroke="#b9dcff" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#crayon)"/>
+      <path d="M-30 20 C-44 20 -44 2 -30 2 C-31 -14 -10 -20 -3 -8 C1 -24 26 -22 27 -6 C41 -8 46 12 32 18 C30 23 22 23 18 21 C10 25 -18 25 -30 20" fill="none" stroke="#2b2d42" stroke-width="3.2" stroke-linecap="round" filter="url(#pencil)"/>
+    </g>
+    <use href="#sk-spark" transform="translate(206 34)"/>
+    <use href="#sk-spark" transform="translate(352 120) scale(.6)"/>
+
+    <!-- 길: 연필 두 줄 + 손으로 끊어 그은 점선 -->
+    <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round">
+      <path d="M8 216 C70 206 128 222 214 212 S366 202 474 212" stroke-width="2.4"/>
+      <path d="M14 218 C80 209 140 223 220 214 S372 205 470 215" stroke-width="1" opacity=".5"/>
+      <path d="M34 238 L58 236 M86 239 L108 238 M138 240 L162 238 M194 239 L216 237 M248 236 L270 235 M302 236 L324 235 M356 235 L378 236 M410 237 L432 237" stroke-width="2"/>
+    </g>
+    <g filter="url(#pencil)">
+      <use href="#sk-grass" transform="translate(110 216)"/>
+      <use href="#sk-grass" transform="translate(330 209) scale(.8)"/>
+      <use href="#sk-grass" transform="translate(452 213) scale(.7)"/>
+    </g>
+
+    <!-- 전기붕붕이 -->
+    <g class="drive">
+      <!-- 달리는 줄 -->
+      <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round" stroke-width="2">
+        <path d="M112 150 C122 148 132 149 142 151"/>
+        <path d="M100 168 C116 166 128 167 140 169"/>
+        <path d="M116 186 C124 185 132 185 140 186"/>
+      </g>
+      <!-- 크레파스 색칠 (선 밖으로 살짝 삐져나옴) -->
+      <path d="M166 180 L178 146 L190 182 L204 136 L216 184 L230 130 L242 184 L256 128 L268 184 L282 130 L294 184 L306 140 L318 182 L330 158 L336 182" stroke="#7fdcb8" stroke-width="15" fill="none" stroke-linejoin="round" stroke-linecap="round" filter="url(#crayon)"/>
+      <path d="M210 150 L222 136 L230 150 L242 134 L246 150" stroke="#e7f5ff" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#crayon)"/>
+      <path d="M266 150 L274 136 L284 150" stroke="#e7f5ff" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#crayon)"/>
+      <path d="M236 166 L242 160 L240 174 L246 168" stroke="#ffd43b" stroke-width="7" fill="none" stroke-linecap="round" filter="url(#crayon)"/>
+      <path d="M314 176 L322 172 L316 180" stroke="#ff9fbd" stroke-width="7" fill="none" stroke-linecap="round" filter="url(#crayon)"/>
+      <!-- 연필 선 (한 번 더 덧그린 가는 선 포함) -->
+      <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M160 188 C153 172 161 161 178 158 C186 141 198 125 216 122 C238 118 266 118 284 123 C299 128 307 143 315 157 C331 159 342 167 338 185 C336 190 330 191 326 191 L162 191 C157 191 157 186 161 183" stroke-width="2.6"/>
+        <path d="M163 185 C158 172 166 163 180 160 C190 143 201 128 218 125 C240 121 264 121 282 126" stroke-width="1.1" opacity=".5"/>
+        <path d="M204 155 C209 140 216 132 230 130 L251 130 L251 155 Z" stroke-width="2.2"/>
+        <path d="M262 155 L262 131 C276 130 287 136 294 153 Z" stroke-width="2.2"/>
+        <path d="M212 148 C214 142 218 138 224 137" stroke-width="1.3" opacity=".7"/>
+        <path d="M241 162 L234 174 L241 174 L236 186" stroke-width="2.2"/>
+        <path d="M256 160 L262 160" stroke-width="2.4"/>
+        <!-- 바퀴: 끝이 살짝 겹치게 한 번에 그린 동그라미 -->
+        <path d="M181 190 C180 178 192 173 200 175 C211 177 216 188 213 197 C210 207 196 211 188 206 C181 202 179 193 184 185" stroke-width="2.6" fill="#fff"/>
+        <path d="M194 191 C196 188 200 190 199 193 C198 196 193 195 195 191" stroke-width="2"/>
+        <path d="M281 190 C280 178 292 173 300 175 C311 177 316 188 313 197 C310 207 296 211 288 206 C281 202 279 193 284 185" stroke-width="2.6" fill="#fff"/>
+        <path d="M294 191 C296 188 300 190 299 193 C298 196 293 195 295 191" stroke-width="2"/>
+        <!-- 얼굴 -->
+        <path d="M322 166 L322 169" stroke-width="3.4"/>
+        <path d="M319 179 C322 183 327 183 330 178" stroke-width="2"/>
+        <!-- 머리 위 하트 -->
+        <path d="M150 120 C143 114 142 109 146 107 C149 105 151 108 151 109 C152 107 155 105 157 108 C159 111 157 115 150 120" stroke-width="1.8"/>
+      </g>
+      <path d="M146 110 L154 111 L149 116" stroke="#ff9fbd" stroke-width="5" fill="none" stroke-linecap="round" filter="url(#crayon)"/>
+    </g>
+
+    <!-- 꽃과 나무 -->
+    <use href="#sk-flower" transform="translate(46 176) scale(.95)"/>
+    <use href="#sk-flower" transform="translate(76 190) scale(.7)"/>
+    <use href="#sk-flower" transform="translate(372 178) scale(.72)"/>
+    <g transform="translate(430 150)">
+      <path d="M-18 6 L14 -14 L-20 -6 L18 2 L-14 14 L16 10 L-6 -22 L8 -20" stroke="#7fdcb8" stroke-width="12" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#crayon)"/>
+      <g filter="url(#pencil)" fill="none" stroke="#2b2d42" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-2 20 C-18 22 -26 10 -19 2 C-26 -10 -14 -24 -3 -19 C4 -30 22 -24 20 -10 C30 -2 22 18 6 18" stroke-width="2.3"/>
+        <path d="M0 18 C1 34 -1 48 0 62 M6 18 C6 34 5 48 7 62" stroke-width="2.2"/>
+        <path d="M3 40 L-5 32" stroke-width="1.8"/>
+        <path d="M-12 -6 C-9 -9 -5 -9 -3 -6 M6 4 C9 1 13 2 14 5" stroke-width="1.3" opacity=".6"/>
+      </g>
+    </g>
+  </svg>
+</header>
+
+<main class="wrap">
+  <form class="sheet filters" id="ask">
+    <span class="tape l"></span><span class="tape r"></span>
+    <div>
+      <label class="q" for="from"><svg class="dd"><use href="#d-pin"/></svg>어디서 출발해요?</label>
+      <select id="from"></select>
+    </div>
+    <div>
+      <span class="q"><svg class="dd"><use href="#d-calendar"/></svg>언제 가요?</span>
+      <div class="seg" id="day"></div>
+    </div>
+    <div>
+      <span class="q"><svg class="dd"><use href="#d-bag"/></svg>뭐 하고 싶어요?</span>
+      <div class="seg" id="theme"></div>
+    </div>
+    <button class="go" type="submit"><svg class="dd"><use href="#d-car"/></svg>추천 받기</button>
+  </form>
+
+  <div id="result"></div>
+</main>
+
+<dialog id="dlg">
+  <div class="dlg-head">
+    <svg class="dd"><use href="#d-bolt"/></svg>
+    <h2 id="dlg-title">급속 충전소</h2>
+    <button type="button" onclick="document.getElementById('dlg').close()">닫기</button>
+  </div>
+  <div class="dlg-body">
+    <div id="cmap"></div>
+    <div class="dlg-list" id="dlg-list"></div>
+  </div>
+</dialog>
+
+<footer class="wrap">
+  <svg class="garden" viewBox="0 0 520 64" aria-hidden="true" style="color:var(--ink)">
+    <path d="M0 62 H520" stroke="var(--ink)" stroke-width="2.4" stroke-linecap="round" style="filter:url(#wobble)"/>
+    <use href="#d-flower" x="10" y="20" width="28" height="43" style="filter:url(#wobble)"/>
+    <use href="#d-flower" x="40" y="30" width="22" height="33" style="filter:url(#wobble)"/>
+    <use href="#d-tree" x="92" y="10" width="38" height="53" style="filter:url(#wobble)"/>
+    <use href="#d-star" x="150" y="16" width="14" height="14"/>
+    <use href="#d-car" x="190" y="24" width="70" height="40" style="filter:url(#wobble)"/>
+    <use href="#d-flower" x="290" y="26" width="24" height="37" style="filter:url(#wobble)"/>
+    <use href="#d-heart" x="330" y="30" width="14" height="14"/>
+  </svg>
+  <p class="source">
+    데이터 출처:
+    <a href="https://www.data.go.kr/data/15101578/openapi.do" target="_blank" rel="noopener">한국관광공사 TourAPI</a>(관광지와 사진: 한국관광공사),
+    <a href="https://www.data.go.kr/data/15084084/openapi.do" target="_blank" rel="noopener">기상청 단기예보</a>,
+    <a href="https://www.data.go.kr/data/15073861/openapi.do" target="_blank" rel="noopener">에어코리아 대기오염정보</a>(환경부 미세먼지 예보),
+    <a href="https://www.data.go.kr/data/15076352/openapi.do" target="_blank" rel="noopener">한국환경공단 전기차 충전소 정보</a>,
+    지도 Tiles © Esri.<br>
+    날씨와 미세먼지는 예보라서 실제와 다를 수 있어요. 충전기 상태는 운영사가 보낸 마지막 기록이에요.
+  </p>
+  <details class="api-box">
+    <summary>🔌 이 화면이 쓰는 API 보기 <small id="api-count"></small></summary>
+    <div class="api-body">
+      <div id="api-list"><code>아직 부른 API가 없어요.</code></div>
+      <p><small>🔑 화면에는 키를 가렸지만, 링크와 F12 → Network 탭에서는 키가 보여요. 이 화면은 내 컴퓨터에서만 쓰세요.<br>
+      추천 한 번에 관광 2번(하루 동안 기억), 미세먼지 1번, 날씨 10번, 충전소 5번 정도 불러요.</small></p>
+    </div>
+  </details>
+</footer>
+
+<script>
+  // 출발지: 서울 25개 구청 위치 (대략)
+  const FROM = {
+    "강남구": [37.5172, 127.0473], "강동구": [37.5301, 127.1238], "강북구": [37.6396, 127.0257], "강서구": [37.5509, 126.8495],
+    "관악구": [37.4784, 126.9516], "광진구": [37.5385, 127.0823], "구로구": [37.4954, 126.8874], "금천구": [37.4519, 126.9020],
+    "노원구": [37.6542, 127.0568], "도봉구": [37.6688, 127.0471], "동대문구": [37.5744, 127.0396], "동작구": [37.5124, 126.9393],
+    "마포구": [37.5663, 126.9019], "서대문구": [37.5791, 126.9368], "서초구": [37.4837, 127.0324], "성동구": [37.5634, 127.0368],
+    "성북구": [37.5894, 127.0167], "송파구": [37.5145, 127.1059], "양천구": [37.5170, 126.8665], "영등포구": [37.5264, 126.8962],
+    "용산구": [37.5326, 126.9905], "은평구": [37.6027, 126.9291], "종로구": [37.5735, 126.9790], "중구": [37.5641, 126.9979],
+    "중랑구": [37.6066, 127.0927],
+  };
+  const THEMES = [["", "전체"], ["NA", "자연"], ["VE", "문화·명소"], ["HS", "역사"], ["EX", "체험"]];
+  const THEME_ICON = { NA: "🌿", VE: "🎡", HS: "🏯", EX: "🧗" };
+
+  // 미세먼지 예보 권역: 경기북부 시군 (나머지 경기는 경기남부)
+  const GG_NORTH = ["41150", "41250", "41280", "41310", "41360", "41480", "41630", "41650", "41800", "41820"];
+  const GRADE = { "좋음": 1, "보통": 2, "나쁨": 3, "매우나쁨": 4 };
+  const GRADE_PT = { 1: 30, 2: 20, 3: 5, 4: 0 };
+
+  // 충전기 타입 중 급속 (01,03,04,05,06,09,10,11)
+  const FAST = ["01", "03", "04", "05", "06", "09", "10", "11"];
+
+  const pick = { day: 1, theme: "" };  // 지금 고른 필터
+  const calls = {};
+  let running = 0;      // 마지막 추천만 화면에 그리려고 번호를 셈
+  let shown = [];       // 화면에 나온 추천 3곳 (충전소 창에서 씀)
+  let cmap = null, cLayer = null;
+
+  // 손그림 아이콘 하나 꺼내기
+  const dd = id => `<svg class="dd" aria-hidden="true"><use href="#d-${id}"/></svg>`;
+
+  // API에서 온 글자를 화면에 그대로 넣지 않도록 바꿔 줌
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function hasKey() {
+    return typeof CONFIG !== "undefined" && CONFIG.SERVICE_KEY && !CONFIG.SERVICE_KEY.includes("여기에");
+  }
+
+  function withKey(url) {
+    return url + "&serviceKey=" + encodeURIComponent(CONFIG.SERVICE_KEY);
+  }
+
+  // 🔌 상자: 이름별로 마지막에 부른 주소를 보여 줌 (키는 가림)
+  function showApi(label, url) {
+    calls[label] = url;
+    document.getElementById("api-list").innerHTML = Object.entries(calls).map(([l, u]) => `
+      <strong>${esc(l)}</strong>
+      <code>${esc(u.replace(/serviceKey=[^&]*/, "serviceKey=🔑(숨김)"))}</code>
+      <a href="${esc(u)}" target="_blank" rel="noopener">새 탭에서 원본 JSON 보기 ↗</a>
+    `).join("");
+    document.getElementById("api-count").textContent = `(${Object.keys(calls).length}종류)`;
+  }
+
+  async function getJson(url, retry = 2) {
+    const res = await fetch(url); // 🔌 API 호출
+    // 공공데이터포털은 가끔 504(서버 시간 초과)를 줌 → 잠깐 쉬고 다시 부름
+    if (res.status >= 500 && retry > 0) {
+      await new Promise(ok => setTimeout(ok, 800));
+      return getJson(url, retry - 1);
+    }
+    if (!res.ok) throw new Error("응답 코드 " + res.status);
+    const data = await res.json();
+    if (data.OpenAPI_ServiceResponse) throw new Error(data.OpenAPI_ServiceResponse.cmmMsgHeader?.returnAuthMsg || "API 오류");
+    const code = data.response?.header?.resultCode ?? data.resultCode;
+    if (code && !["00", "0000"].includes(code)) throw new Error(data.response?.header?.resultMsg || data.resultMsg || "API 오류");
+    return data;
+  }
+
+  // 두 지점 사이 직선거리(km)
+  function km(a, b) {
+    const R = 6371, D = Math.PI / 180;
+    const x = Math.sin((b[0] - a[0]) * D / 2) ** 2 + Math.cos(a[0] * D) * Math.cos(b[0] * D) * Math.sin((b[1] - a[1]) * D / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(x));
+  }
+
+  // 위도·경도 → 기상청 격자(nx, ny) (기상청 공식 변환식)
+  function toGrid(lat, lon) {
+    const RE = 6371.00877, GRID = 5.0, SLAT1 = 30, SLAT2 = 60, OLON = 126, OLAT = 38, XO = 43, YO = 136;
+    const D = Math.PI / 180, re = RE / GRID;
+    const s1 = SLAT1 * D, s2 = SLAT2 * D, olon = OLON * D, olat = OLAT * D;
+    let sn = Math.tan(Math.PI * 0.25 + s2 * 0.5) / Math.tan(Math.PI * 0.25 + s1 * 0.5);
+    sn = Math.log(Math.cos(s1) / Math.cos(s2)) / Math.log(sn);
+    let sf = Math.tan(Math.PI * 0.25 + s1 * 0.5);
+    sf = Math.pow(sf, sn) * Math.cos(s1) / sn;
+    const ro = re * sf / Math.pow(Math.tan(Math.PI * 0.25 + olat * 0.5), sn);
+    const ra = re * sf / Math.pow(Math.tan(Math.PI * 0.25 + lat * D * 0.5), sn);
+    let theta = lon * D - olon;
+    if (theta > Math.PI) theta -= 2 * Math.PI;
+    if (theta < -Math.PI) theta += 2 * Math.PI;
+    theta *= sn;
+    return { nx: Math.floor(ra * Math.sin(theta) + XO + 0.5), ny: Math.floor(ro - ra * Math.cos(theta) + YO + 0.5) };
+  }
+
+  const pad = n => String(n).padStart(2, "0");
+  const ymd = d => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const kakaoTo = (name, lat, lng) => `https://map.kakao.com/link/to/${encodeURIComponent(name)},${lat},${lng}`;
+
+  // 단기예보는 하루 8번(02·05·08·11·14·17·20·23시) 발표, 10분 뒤부터 받을 수 있음
+  function latestBase(now = new Date()) {
+    const d = new Date(now.getTime() - 10 * 60000);
+    const hour = [23, 20, 17, 14, 11, 8, 5, 2].find(h => d.getHours() >= h);
+    if (hour === undefined) {
+      d.setDate(d.getDate() - 1);
+      return { date: ymd(d), time: "2300" };
+    }
+    return { date: ymd(d), time: pad(hour) + "00" };
+  }
+
+  // ───── 1. 관광지 (하루 동안 이 브라우저에 기억) ─────
+  async function loadTour() {
+    const today = new Date().toDateString();
+    try {
+      const c = JSON.parse(localStorage.getItem("drive-tour"));
+      if (c && c.day === today) return c.spots;
+    } catch {}
+    const spots = [];
+    for (const [label, url] of [["관광지 (경기)", API.TOUR_GG], ["관광지 (인천)", API.TOUR_IC]]) {
+      const full = withKey(url);
+      showApi(label, full);
+      const data = await getJson(full);
+      for (const it of data.response.body.items.item || []) {
+        if (!it.mapx || !it.mapy) continue;
+        spots.push({
+          id: it.contentid, title: it.title, addr: it.addr1, img: it.firstimage,
+          lat: +it.mapy, lng: +it.mapx, theme: it.lclsSystm1,
+          regn: it.lDongRegnCd, sgg: it.lDongSignguCd,
+        });
+      }
+    }
+    try { localStorage.setItem("drive-tour", JSON.stringify({ day: today, spots })); } catch {}
+    return spots;
+  }
+
+  // 관광지를 시·군(인천은 구·군)으로 묶음. 경기의 "수원시 장안구"는 "수원시"로 묶음
+  function groupRegions(spots, theme, from) {
+    const regions = {};
+    for (const s of spots) {
+      if (theme && s.theme !== theme) continue;
+      const code = s.regn === "41" ? s.regn + s.sgg.slice(0, 2) + "0" : s.regn + s.sgg;
+      const words = s.addr.split(" ");
+      const name = s.regn === "41" ? words[1] : `인천 ${words[1]}`;
+      const r = regions[code] ||= { code, name, regn: s.regn, spots: [] };
+      r.spots.push(s);
+    }
+    for (const r of Object.values(regions)) {
+      // 사진 있는 곳 먼저, 그다음 출발지에서 가까운 곳
+      r.spots.sort((a, b) => (!!b.img - !!a.img) || km(from, [a.lat, a.lng]) - km(from, [b.lat, b.lng]));
+      r.top = r.spots.slice(0, 3);
+      r.center = [r.top.reduce((t, s) => t + s.lat, 0) / r.top.length, r.top.reduce((t, s) => t + s.lng, 0) / r.top.length];
+      r.km = Math.round(km(from, r.center));
+      r.airArea = r.regn === "28" ? "인천" : GG_NORTH.includes(r.code) ? "경기북부" : "경기남부";
+    }
+    // 근교(직선 20~90km), 고른 테마 관광지 3곳 이상 → 관광지 많은 순 10곳
+    return Object.values(regions)
+      .filter(r => r.km >= 20 && r.km <= 90 && r.spots.length >= 3)
+      .sort((a, b) => b.spots.length - a.spots.length)
+      .slice(0, 10);
+  }
+
+  // ───── 2. 미세먼지 예보 ─────
+  async function loadAir(dateStr) {
+    const today = new Date();
+    const url = withKey(API.AIR + `&searchDate=${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`);
+    showApi("미세먼지 예보", url);
+    const data = await getJson(url);
+    // (예보 날짜, PM10/PM25)마다 가장 최근 발표만 남김
+    const latest = {};
+    for (const it of data.response.body.items || []) {
+      if (!["PM10", "PM25"].includes(it.informCode)) continue;
+      const k = it.informData + it.informCode;
+      if (!latest[k] || it.dataTime > latest[k].dataTime) latest[k] = it;
+    }
+    const grades = {};
+    for (const code of ["PM10", "PM25"]) {
+      const it = latest[dateStr + code];
+      if (!it) continue;
+      for (const part of it.informGrade.split(",")) {
+        const [area, g] = part.split(":").map(t => t.trim());
+        grades[area] = Math.max(grades[area] || 0, GRADE[g] || 0);
+      }
+    }
+    return grades; // 예: { 경기북부: 1, 인천: 2 } — 값이 없으면 아직 예보 전
+  }
+
+  // ───── 3. 날씨 (기상청 단기예보) ─────
+  async function loadWeather(r, day) {
+    const { nx, ny } = toGrid(r.center[0], r.center[1]);
+    const base = latestBase();
+    const url = withKey(API.WEATHER + `&base_date=${base.date}&base_time=${base.time}&nx=${nx}&ny=${ny}`);
+    showApi(`날씨 (예: ${r.name})`, url);
+    const data = await getJson(url);
+    const items = (data.response.body.items.item || []).filter(it => it.fcstDate === ymd(day));
+
+    // 낮 시간(10~18시)만 봄. 오늘인데 이미 저녁이면 남은 시간
+    const nowH = new Date().getHours();
+    const isToday = ymd(day) === ymd(new Date());
+    let from = isToday ? Math.max(10, nowH) : 10, to = 18;
+    if (from > to) { from = nowH; to = 23; }
+    const hours = {};
+    for (const it of items) {
+      const h = +it.fcstTime.slice(0, 2);
+      if (h < from || h > to) continue;
+      (hours[h] ||= {})[it.category] = it.fcstValue;
+    }
+    const list = Object.values(hours);
+    if (list.length === 0) throw new Error("이 날짜 예보가 아직 없어요");
+
+    const temps = list.map(h => +h.TMP).filter(n => !isNaN(n));
+    const pop = Math.max(...list.map(h => +h.POP || 0));
+    const rainy = list.some(h => +h.PTY > 0);
+    const snow = list.some(h => h.PTY === "3");
+    const skyAvg = list.reduce((t, h) => t + (+h.SKY || 1), 0) / list.length; // 1 맑음, 3 구름많음, 4 흐림
+    const tMin = Math.min(...temps), tMax = Math.max(...temps);
+
+    let pt = 40 - pop * 0.3 - (skyAvg - 1) * 2;
+    if (rainy) pt -= 10;
+    if (tMax > 30 || tMin < 0) pt -= 5;
+    pt = Math.max(0, Math.round(pt));
+
+    const icon = rainy || snow ? "rain" : skyAvg < 2 ? "sun" : "cloud";
+    const sky = snow ? "눈 소식" : rainy ? "비 소식" : skyAvg < 2 ? "맑음" : skyAvg < 3.5 ? "구름 많음" : "흐림";
+    return { pt, icon, sky, tMin, tMax, pop, hours: `${from}~${to}시` };
+  }
+
+  // ───── 4. 충전소 (관광지 3km 안, 누구나 쓸 수 있는 급속) ─────
+  async function loadCharger(r) {
+    const zcode = r.regn;
+    let url = withKey(API.CHARGER + `&zcode=${zcode}&zscode=${r.code}`);
+    showApi(`충전소 (예: ${r.name})`, url);
+    let data = await getJson(url);
+    // 인천 새 구처럼 코드가 다르면 끝자리를 0으로 바꿔 한 번 더
+    if (!data.totalCount && !r.code.endsWith("0")) {
+      url = withKey(API.CHARGER + `&zcode=${zcode}&zscode=${r.code.slice(0, 4)}0`);
+      data = await getJson(url);
+    }
+
+    // 충전기 → 충전소(statId)로 묶고, 가장 가까운 관광지를 붙임
+    const byId = {};
+    for (const c of data.items?.item || []) {
+      if (!FAST.includes(c.chgerType) || c.limitYn === "Y") continue;
+      const pos = [+c.lat, +c.lng];
+      const nearest = r.top.map(s => ({ s, d: km([s.lat, s.lng], pos) })).sort((a, b) => a.d - b.d)[0];
+      if (!nearest || nearest.d > 3) continue;
+      const st = byId[c.statId] ||= {
+        name: c.statNm, addr: c.addr, lat: pos[0], lng: pos[1], useTime: c.useTime,
+        parkingFree: c.parkingFree, busiNm: c.busiNm, spot: nearest.s.title, d: nearest.d,
+        fast: 0, free: 0, maxKw: 0,
+      };
+      st.fast++;
+      if (c.stat === "2") st.free++;
+      st.maxKw = Math.max(st.maxKw, +c.output || 0);
+    }
+    const stations = Object.values(byId).sort((a, b) => (b.free > 0) - (a.free > 0) || a.d - b.d);
+    const fast = stations.reduce((t, s) => t + s.fast, 0);
+    const free = stations.reduce((t, s) => t + s.free, 0);
+    const pt = free >= 3 ? 30 : free >= 1 ? 20 : fast ? 10 : 0;
+    return { pt, fast, free, stations };
+  }
+
+  // ───── 추천 만들기 ─────
+  async function recommend() {
+    const my = ++running;
+    const result = document.getElementById("result");
+    const fromName = document.getElementById("from").value;
+    const from = FROM[fromName];
+    const day = new Date();
+    day.setDate(day.getDate() + pick.day);
+    const dayDash = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+
+    if (!hasKey()) {
+      result.innerHTML = `<div class="error">인증키가 없어요. 같은 폴더의 config.js에 공공데이터포털 인증키를 넣고 저장해 주세요.</div>`;
+      return;
+    }
+    const step = msg => {
+      if (my !== running) return;
+      result.innerHTML = `
+        <div class="loading" role="status">
+          <svg viewBox="0 0 220 70" aria-hidden="true" style="color:var(--ink)">
+            <path d="M4 62 H216" stroke="var(--ink-soft)" stroke-width="2" stroke-dasharray="8 9"/>
+            <g class="runner"><use href="#d-car" x="0" y="14" width="80" height="47" style="filter:url(#wobble)"/></g>
+          </svg>
+          ${msg}
+        </div>`;
+    };
+
+    // 1) 관광지 — 이게 없으면 추천을 못 함
+    step("서울 근교 관광지를 모으는 중이에요");
+    let regions;
+    try {
+      regions = groupRegions(await loadTour(), pick.theme, from);
+    } catch (err) {
+      result.innerHTML = errorBox("관광지를 불러오지 못했어요.", err);
+      return;
+    }
+    if (regions.length === 0) {
+      result.innerHTML = `<div class="error">조건에 맞는 근교 관광지가 없어요. 테마를 바꿔 보세요.</div>`;
+      return;
+    }
+
+    // 2) 미세먼지 예보 — 실패해도 추천은 계속 (공기 점수는 비워 둠)
+    step("미세먼지 예보를 확인하는 중이에요");
+    let air = null, airErr = null;
+    try { air = await loadAir(dayDash); } catch (err) { airErr = err; }
+
+    // 3) 날씨 — 후보 10곳 각각 (따로 실패할 수 있음)
+    step(`후보 ${regions.length}곳의 날씨를 보는 중이에요`);
+    await Promise.all(regions.map(async r => {
+      try { r.weather = await loadWeather(r, day); } catch (err) { r.weatherErr = err; }
+      const g = air?.[r.airArea];
+      r.air = air ? (g ? { grade: g, pt: GRADE_PT[g] } : { grade: 0, pt: 15, none: true }) : null;
+      r.pre = (r.weather?.pt ?? 20) + (r.air?.pt ?? 15);
+    }));
+
+    // 4) 충전소 — 날씨·공기 상위 5곳만 (호출 아끼기)
+    step("관광지 근처 급속 충전소를 찾는 중이에요");
+    regions.sort((a, b) => b.pre - a.pre || a.km - b.km);
+    const top5 = regions.slice(0, 5);
+    await Promise.all(top5.map(async r => {
+      try { r.charge = await loadCharger(r); } catch (err) { r.chargeErr = err; }
+    }));
+    for (const r of regions) r.total = r.pre + (r.charge?.pt ?? (top5.includes(r) ? 15 : 0));
+    top5.sort((a, b) => b.total - a.total || a.km - b.km); // 점수가 같으면 가까운 곳 먼저
+
+    if (my !== running) return;
+    shown = top5.slice(0, 3);
+    const rest = regions.filter(r => !shown.includes(r)).sort((a, b) => b.total - a.total || a.km - b.km);
+    const themeName = THEMES.find(t => t[0] === pick.theme)[1];
+    const week = "일월화수목금토"[day.getDay()];
+    result.innerHTML = `
+      <div class="summary">
+        <h2>${dd("star")}이번 드라이브는 여기 어때요?</h2>
+        <p>${esc(fromName)}에서 출발해 ${day.getMonth() + 1}월 ${day.getDate()}일(${week})에 갈 만한 곳을, ${themeName} 테마 후보 ${regions.length}곳 중에서 골랐어요.</p>
+        ${airErr ? `<p class="warn">미세먼지 예보를 불러오지 못해서 공기 점수는 15점으로 계산했어요. (${esc(airErr.message)})<button onclick="recommend()">다시 시도</button></p>` : ""}
+      </div>
+      <div class="cards">${shown.map((r, i) => regionCard(r, i)).join("")}</div>
+      <div class="lower">
+        <section class="sheet others">
+          <h2>${dd("pencil")}아깝게 떨어진 후보</h2>
+          <table>
+            <thead><tr><th>지역</th><th>거리</th><th>날씨</th><th>미세먼지</th><th>빈 급속</th><th class="num">점수</th></tr></thead>
+            <tbody>
+              ${rest.map(r => `<tr>
+                <td><b>${esc(r.name)}</b></td>
+                <td>${r.km}km</td>
+                <td>${r.weather ? `${r.weather.sky}, 비 ${r.weather.pop}%` : "—"}</td>
+                <td>${airText(r)}</td>
+                <td>${r.charge ? `${r.charge.free}대` : "—"}</td>
+                <td class="num"><b>${r.total}</b></td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+          <p class="hint">빈 급속이 —인 곳은 호출을 아끼려고 충전소를 확인하지 않았어요.</p>
+        </section>
+        <aside class="postit">
+          <h2>${dd("heart")}점수 매기는 법</h2>
+          <ul>
+            <li><b>날씨 40점</b>기상청 단기예보로 낮 10~18시의 비 올 확률, 하늘, 기온을 봐요.</li>
+            <li><b>미세먼지 30점</b>에어코리아 예보에서 PM10과 PM2.5 중 나쁜 쪽을 봐요. 좋음 30, 보통 20, 나쁨 5, 매우나쁨 0.</li>
+            <li><b>충전 30점</b>관광지 3km 안 공용 급속 충전기 중 지금 빈 수를 세요. 3대 이상 30, 1~2대 20, 모두 사용 중 10, 없음 0.</li>
+            <li>거리는 출발 구청에서 잰 직선거리라 실제 도로는 더 길어요.</li>
+          </ul>
+        </aside>
+      </div>
+    `;
+  }
+
+  function airText(r) {
+    if (!r.air) return "—";
+    if (r.air.none) return `<span class="badge g0">예보 전</span>`;
+    const name = Object.keys(GRADE).find(k => GRADE[k] === r.air.grade);
+    return `<span class="badge g${r.air.grade}">${name}</span>`;
+  }
+
+  function chargeHtml(r, i) {
+    const c = r.charge;
+    if (!c) {
+      return `<li class="fact">${dd("bolt")}
+        <div><div class="fail">충전소를 불러오지 못했어요</div><div class="d">${esc(r.chargeErr?.message)}</div></div>
+        <span class="pt">?/30</span></li>`;
+    }
+    if (c.stations.length === 0) {
+      return `<li class="fact">${dd("bolt")}
+        <div><div class="v">근처 급속 충전소 없음</div><div class="d">관광지 3km 안에 공용 급속이 없어요</div></div>
+        <span class="pt">${c.pt}/30</span></li>`;
+    }
+    return `
+      <li class="charge">
+        <button type="button" class="charge-btn" onclick="openChargers(${i})">
+          ${dd("bolt")}
+          <div>
+            <div class="v">${c.free ? `지금 빈 급속 ${c.free}대` : "급속 모두 사용 중"}</div>
+            <div class="d">3km 안 급속 충전소 ${c.stations.length}곳</div>
+            <span class="more">충전소 위치 지도로 보기</span>
+          </div>
+          <span class="pt">${c.pt}/30</span>
+        </button>
+        <div class="note" role="tooltip">
+          <span class="tape"></span>
+          <h4>가까운 급속 충전소</h4>
+          <ul>
+            ${c.stations.slice(0, 3).map(s => `<li>
+              <span class="badge ${s.free ? "free" : "busy"}">${s.free ? `빈 ${s.free}/${s.fast}` : "사용 중"}</span>
+              <span>${esc(s.name)}<small>${esc(s.spot)}에서 ${s.d.toFixed(1)}km</small></span>
+            </li>`).join("")}
+          </ul>
+          <p>눌러서 지도로 ${c.stations.length}곳을 모두 볼 수 있어요.</p>
+        </div>
+      </li>`;
+  }
+
+  function regionCard(r, i) {
+    const w = r.weather;
+    const cover = r.top.find(s => s.img);
+    return `
+      <article class="card">
+        <span class="tape"></span>
+        <figure class="polaroid" style="margin:0">
+          ${cover ? `<img src="${esc(cover.img.replace(/^http:/, "https:"))}" alt="${esc(cover.title)}">` : `<div class="noimg"></div>`}
+          <figcaption>${cover ? esc(cover.title) : "사진이 없어요"}</figcaption>
+        </figure>
+        <div class="card-title">
+          <div>
+            <div class="rank">${i + 1}등 추천</div>
+            <h3><span>${esc(r.name)}</span></h3>
+            <div class="where">직선 ${r.km}km, 관광지 ${r.spots.length}곳</div>
+          </div>
+          <div class="grade-circle" aria-label="${r.total}점">
+            <svg viewBox="0 0 82 66" aria-hidden="true"><path d="M44 5 C66 3 80 16 78 33 C76 52 58 62 38 61 C17 60 3 48 4 31 C5 15 20 5 40 6 C47 6 52 8 56 10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+            <span><b>${r.total}</b><small>점</small></span>
+          </div>
+        </div>
+        <ul class="facts">
+          <li class="fact">
+            ${dd(w ? w.icon : "cloud")}
+            ${w ? `<div><div class="v">${w.sky}, ${w.tMin}~${w.tMax}°</div><div class="d">${w.hours} 비 올 확률 최대 ${w.pop}%</div></div>`
+                : `<div><div class="fail">날씨를 불러오지 못했어요</div><div class="d">${esc(r.weatherErr?.message)}</div></div>`}
+            <span class="pt">${w ? w.pt : "?"}/40</span>
+          </li>
+          <li class="fact">
+            ${dd("wind")}
+            ${r.air ? `<div><div class="v">미세먼지 ${airText(r)}</div><div class="d">${esc(r.airArea)} 예보${r.air.none ? ", 아직 발표 전이에요" : ""}</div></div>`
+                    : `<div><div class="fail">미세먼지 예보를 불러오지 못했어요</div></div>`}
+            <span class="pt">${r.air ? r.air.pt : "?"}/30</span>
+          </li>
+          ${chargeHtml(r, i)}
+        </ul>
+        <div class="spots">
+          <h4>${dd("flower")}가볼 곳</h4>
+          ${r.top.map(s => `
+            <div class="spot">
+              ${s.img ? `<img src="${esc(s.img.replace(/^http:/, "https:"))}" alt="" loading="lazy">` : `<span class="noimg"></span>`}
+              <span class="nm">${esc(s.title)}</span>
+              <a href="${kakaoTo(s.title, s.lat, s.lng)}" target="_blank" rel="noopener">길찾기</a>
+            </div>`).join("")}
+        </div>
+      </article>
+    `;
+  }
+
+  // ───── 충전소 지도 창 ─────
+  function openChargers(i) {
+    const r = shown[i];
+    const list = r.charge.stations;
+    const dlg = document.getElementById("dlg");
+    document.getElementById("dlg-title").textContent = `${r.name} 관광지 근처 급속 충전소 ${list.length}곳`;
+    document.getElementById("dlg-list").innerHTML = `
+      <p class="legend"><span class="badge free">빈 자리 있음</span><span class="badge busy">모두 사용 중</span><span class="badge" style="background:var(--ink);color:#fff">관광지</span></p>
+      ${list.map((s, k) => `
+        <div class="row" data-k="${k}">
+          <span class="badge ${s.free ? "free" : "busy"}">${s.free ? `빈 ${s.free}/${s.fast}` : "모두 사용 중"}</span>
+          <b>${esc(s.name)}</b>
+          <small>${esc(s.addr)}</small>
+          <small>${esc(s.spot)}에서 ${s.d.toFixed(1)}km, 최대 ${s.maxKw}kW, 주차 ${s.parkingFree === "Y" ? "무료" : "유료이거나 확인 필요"}${s.useTime ? `, ${esc(s.useTime)}` : ""}</small>
+          <a href="${kakaoTo(s.name, s.lat, s.lng)}" target="_blank" rel="noopener">여기로 길찾기</a>
+        </div>`).join("")}`;
+    dlg.showModal();
+
+    if (typeof L === "undefined") {
+      document.getElementById("cmap").innerHTML = `<div class="error" style="margin:16px">지도 도구를 불러오지 못했어요. 옆 목록을 봐 주세요.</div>`;
+      return;
+    }
+    if (!cmap) {
+      cmap = L.map("cmap");
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", {
+        maxZoom: 19, attribution: "Tiles © Esri",
+      }).addTo(cmap);
+      cLayer = L.layerGroup().addTo(cmap);
+    }
+    cmap.invalidateSize();
+    cLayer.clearLayers();
+    const markers = list.map((s, k) => L.marker([s.lat, s.lng], {
+      icon: L.divIcon({ className: "", html: `<span class="pin ${s.free ? "free" : "busy"}">${s.free ? `빈 ${s.free}` : "사용 중"}</span>` }),
+      zIndexOffset: s.free ? 1000 : 0,
+    }).bindPopup(`<b>${esc(s.name)}</b><br>${s.free ? `빈 급속 ${s.free}/${s.fast}대` : "급속 모두 사용 중"}<br><a href="${kakaoTo(s.name, s.lat, s.lng)}" target="_blank" rel="noopener">길찾기</a>`)
+      .on("click", () => highlight(k)).addTo(cLayer));
+    for (const s of r.top) {
+      L.marker([s.lat, s.lng], { icon: L.divIcon({ className: "", html: `<span class="pin spot">${THEME_ICON[s.theme] || "📍"} ${esc(s.title)}</span>` }), zIndexOffset: 2000 })
+        .addTo(cLayer);
+    }
+    cmap.fitBounds([...list.map(s => [s.lat, s.lng]), ...r.top.map(s => [s.lat, s.lng])], { padding: [30, 30] });
+
+    function highlight(k) {
+      document.querySelectorAll("#dlg-list .row").forEach(el => el.classList.toggle("sel", +el.dataset.k === k));
+      document.querySelector(`#dlg-list .row[data-k="${k}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    document.getElementById("dlg-list").onclick = e => {
+      const row = e.target.closest(".row");
+      if (!row || e.target.closest("a")) return;
+      const k = +row.dataset.k;
+      highlight(k);
+      cmap.setView([list[k].lat, list[k].lng], 16);
+      markers[k].openPopup();
+    };
+  }
+
+  function errorBox(title, err) {
+    return `
+      <div class="error">
+        ${title} 인터넷 연결이나 config.js의 키, 맨 위 🔌 주소를 확인해 주세요.<br>
+        <small>(${esc(err.message)})</small>
+        <button onclick="recommend()">다시 시도</button>
+      </div>`;
+  }
+
+  // ───── 필터 연결 ─────
+  document.getElementById("from").innerHTML = Object.keys(FROM)
+    .map(n => `<option value="${n}" ${n === "송파구" ? "selected" : ""}>서울 ${n}</option>`).join("");
+
+  function drawSeg(id, items, key) {
+    const box = document.getElementById(id);
+    box.innerHTML = items.map(([value, label, sub]) =>
+      `<button type="button" data-v="${value}" aria-pressed="${pick[key] === value}" class="${pick[key] === value ? "on" : ""}">${label}${sub ? `<small>${sub}</small>` : ""}</button>`).join("");
+    box.onclick = e => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      pick[key] = key === "day" ? +b.dataset.v : b.dataset.v;
+      box.querySelectorAll("button").forEach(x => {
+        x.classList.toggle("on", x === b);
+        x.setAttribute("aria-pressed", x === b);
+      });
+    };
+  }
+  drawSeg("day", ["오늘", "내일", "모레"].map((label, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    return [i, label, `${d.getMonth() + 1}/${d.getDate()} ${"일월화수목금토"[d.getDay()]}`];
+  }), "day");
+  drawSeg("theme", THEMES, "theme");
+
+  document.getElementById("ask").addEventListener("submit", e => {
+    e.preventDefault();
+    recommend();
+  });
+  recommend();
+</script>
+</body>
+</html>
